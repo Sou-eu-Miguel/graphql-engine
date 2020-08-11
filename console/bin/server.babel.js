@@ -6,10 +6,13 @@ const babelrc = fs.readFileSync('.babelrc');
 let config;
 
 try {
-  config = JSON.parse(babelrc);
+  config = {
+    ...JSON.parse(babelrc),
+    extensions: ['.ts', '.tsx', '.js', '.jsx'],
+  };
 } catch (err) {
   console.error('==>     ERROR: Error parsing your .babelrc.');
   console.error(err);
 }
 
-require('babel-core/register')(config);
+require('@babel/register')(config);

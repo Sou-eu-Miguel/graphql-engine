@@ -1,81 +1,69 @@
-Troubleshooting Hasura GraphQL Engine Errors
+.. meta::
+   :description: Troubleshoot Hasura GraphQL engine errors
+   :keywords: hasura, docs, error, troubleshooting
+
+.. _troubleshooting:
+
+Troubleshooting Hasura GraphQL engine errors
 ============================================
 
-Hasura GraphQL engine may not work as expected and will throw unexpected errors if the tables/views tracked by
-the GraphQL engine are altered using ``psql`` or any other PostgreSQL client.
+.. contents:: Table of contents
+  :backlinks: none
+  :depth: 1
+  :local:
 
-Hasura GraphQL engine creates and maintains an **internal state** based on the database it is configured to use.
-This internal state will comprise information about the tables/views, relationships and access control rules
-defined on them using Hasura GraphQL engine. See :doc:`Hasura GraphQL engine internals <../engine-internals/index>`
-for information on how this internal state is maintained. It is highly recommended doing any modifications to the
-database schema only through Hasura console to avoid corrupting the GraphQL engine's state.
+Introduction
+------------
 
-Following are the list of error messages returned by the GraphQL Engine when it encounters an inconsistent state:
+This section provides references that can help in troubleshooting errors when developing with Hasura.
 
-Error: no such table/view exists in postgres
---------------------------------------------
+Logs
+----
 
-This error is thrown when a table/view tracked by the Hasura GraphQL engine is deleted or is not available in the
-database.
+In order to find out about the origins of an error, it can be helpful to check the logs.
 
-For example, you will encounter the above error if you have:
+Server logs
+^^^^^^^^^^^
 
-- Created/tracked a table called ``author`` from console.
-- Opened ``psql`` or ``adminer`` or any other PostgreSQL client and deleted ``author`` table.
-- Restarted GraphQL engine.
+For errors that come from the Hasura server, server logs will give you more insights.
+For details on how you can access these logs, as well as different log types, visit :ref:`this page <hge_logs>`.
 
-In this example, the GraphQL engine expects the table ``author`` to be available in the database to
-function properly but it can't find it.
+Console logs
+^^^^^^^^^^^^
 
-Solution
-^^^^^^^^
+Should there be any error coming from the Hasura console UI, they will show up in the Browser dev tools.
 
-- Connect to the database and switch to ``hdb_catalog`` schema.
-- Delete the row from ``hdb_table`` table where the column ``table_name`` has the value ``author``.
-- Restart GraphQL engine to verify.
+Remote service logs
+^^^^^^^^^^^^^^^^^^^
 
-Error: no foreign constraint exists on the given column
--------------------------------------------------------
+Errors can come from a remote service, such as :ref:`remote schemas <remote_schemas>`, :ref:`events <event_triggers>` or :ref:`actions <actions>`. 
+In this case, check the errors of the respective remote service. For actions, check out this :ref:`debugging page <debugging_actions>`.
 
-Hasura GraphQL Engine validates all the relationships (created using foreign key/manually) before it starts serving.
-When it encounters a relationship defined from table ``A -> B`` it looks for a foreign key constraint in table ``A``
-and when it can't find it, it throws the above error.
+GitHub issues
+-------------
 
-Solution
-^^^^^^^^
+It's possible that someone with the same problem has created a GitHub issue on the `Hasura repo <https://github.com/hasura/graphql-engine/issues>`__.
+If you don't come across an issue with solution in your search, feel free to create a `new issue <https://github.com/hasura/graphql-engine/issues/new>`__.
 
-- Connect to the database and switch to ``hdb_catalog`` schema.
-- In the ``hdb_relationship`` table, find the entry for the above relationship and delete it.
-- Restart GraphQL engine to verify.
+Hasura blog
+-----------
 
-Error: field already exists
----------------------------
+The `Hasura blog <https://hasura.io/blog/>`__ contains a lot of useful resources including tutorials. 
+You can use the search functionality to find what you're looking for.
 
-When a relationship is created using Hasura GraphQL Engine, it creates a special field with the relationship name
-which is used while fetching nested objects using GraphQL.
+.. admonition:: YouTube
 
-Let's say we have tables called ``article`` and ``author`` as follows:
+  If you prefer to watch tutorials in the form of videos, check out the `Hasura Youtube channel <https://www.youtube.com/channel/UCZo1ciR8pZvdD3Wxp9aSNhQ>`__.
 
-.. image:: ../../../img/graphql/manual/troubleshooting/author_article.jpg
-  :alt: article author schema 
+Postgres docs
+-------------
 
-Using the console if you have created a relationship with name as ``author`` from ``article`` table to
-``author`` table, Hasura GraphQL engine will create a special field ``author`` in the ``article`` table in its
-internal state. This field will be available via the GraphQL interface.
+If you come across a Postgres error, it will be helpful to check the `Postgres documentation <https://www.postgresql.org/docs/current/index.html>`__.
 
-When this table is described using ``psql``, ``author`` field will not be available as part of the list of fields
-returned by the describe command as it is something added by Hasura GraphQL engine. Now if a new column is created
-with the same name, i.e. ``author``, via ``psql``, Hasura GraphQL engine will throw the above error when restarted as it has two
-references to the ``author`` field for the ``article`` table.
+Discord
+-------
 
-Solution
-^^^^^^^^
+If you didn't find a solution in any of the above mentioned sections or if you prefer to troubleshoot with the community,
+feel free to join our `Discord server <https://hasura.io/discord>`__. Other users might have come across the same issues, 
+and the Hasura community on Discord is very active and helpful. 
 
-- Delete the problematic column from the table.
-- Restart GraphQL engine to verify.
-
-OR
-
-- Connect to the database and switch to ``hdb_catalog`` schema.
-- In the ``hdb_relationship`` table, find the entry for the above relationship and delete it.
-- Restart GraphQL engine to verify.

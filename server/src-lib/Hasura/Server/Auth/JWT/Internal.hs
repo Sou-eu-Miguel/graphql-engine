@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Hasura.Server.Auth.JWT.Internal where
 
 import           Control.Lens
@@ -12,12 +10,13 @@ import           Data.ASN1.Types          (ASN1 (End, IntVal, Start),
                                            ASN1ConstructionType (Sequence),
                                            fromASN1)
 import           Data.Int                 (Int64)
+import           Data.Text.Conversions
 
 import           Hasura.Prelude
+import           Hasura.Server.Utils      (fmapL)
 
 import qualified Data.ByteString.Lazy     as BL
 import qualified Data.PEM                 as PEM
-import qualified Data.String.Conversions  as CS
 import qualified Data.Text                as T
 import qualified Data.X509                as X509
 
@@ -25,7 +24,7 @@ import qualified Data.X509                as X509
 
 parseHmacKey :: T.Text -> Int64 -> Either T.Text JWK
 parseHmacKey key size = do
-  let secret = CS.cs key
+  let secret = unUTF8 $ fromText key
       err s = "Key size too small; should be atleast " <> show (s `div` 8) <> " characters"
   if BL.length secret < size `div` 8
     then Left . T.pack $ err size
@@ -33,7 +32,7 @@ parseHmacKey key size = do
 
 parseRsaKey :: T.Text -> Either T.Text JWK
 parseRsaKey key = do
-  let res = fromRawPem (CS.cs key)
+  let res = fromRawPem (unUTF8 $ fromText key)
       err e = "Could not decode PEM: " <> e
   either (Left . err) pure res
 
@@ -98,10 +97,6 @@ pubKeyToJwk pubKey = do
     rsaKeyParams n e =
       RSAKeyParameters (Base64Integer n) (Base64Integer e) Nothing
 
-
-fmapL :: (a -> a') -> Either a b -> Either a' b
-fmapL fn (Left e) = Left (fn e)
-fmapL _ (Right x) = pure x
 
 getAtleastOne :: Text -> [a] -> Either Text a
 getAtleastOne err []  = Left err

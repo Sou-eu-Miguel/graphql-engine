@@ -1,13 +1,13 @@
 description: Upserts article data via GraphQL mutation
-url: /v1alpha1/graphql
+url: /v1/graphql
 response:
- data:
-  insert_article:
-    returning:
-    - content: Updated Article 1 content
-      title: Article 1
-    - content: Updated Article 2 content
-      title: Article 2
+  data:
+    insert_article:
+      returning:
+      - title: Article 1
+        content: Updated Article 1 content
+      - title: Article 2
+        content: Updated Article 2 content
 status: 200
 query:
   query: |
@@ -25,7 +25,7 @@ query:
           ],
         on_conflict: {
           constraint: article_pkey,
-          action: update
+          update_columns: [content]
         }
       ) {
         returning {

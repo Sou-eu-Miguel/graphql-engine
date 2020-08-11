@@ -1,82 +1,120 @@
-{-# LANGUAGE FlexibleContexts      #-}
-{-# LANGUAGE FlexibleInstances     #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings     #-}
-{-# LANGUAGE TemplateHaskell       #-}
-
 module Hasura.Server.Auth.JWT
   ( processJwt
   , RawJWT
   , JWTConfig (..)
   , JWTCtx (..)
-  , JWKSet (..)
+  , Jose.JWKSet (..)
+  , JWTClaimsFormat (..)
+  , JwkFetchError (..)
+  , JWTConfigClaims (..)
   , updateJwkRef
   , jwkRefreshCtrl
+  , defaultClaimNs
+
+  -- * Exposed for testing
+  , processJwt_
+  , allowedRolesClaim
+  , defaultRoleClaim
   ) where
 
-import           Control.Exception               (try)
+import           Control.Exception.Lifted        (try)
 import           Control.Lens
-import           Control.Monad                   (when)
-import           Crypto.JWT
-import           Data.IORef                      (IORef, modifyIORef, readIORef)
-
-import           Data.List                       (find)
-import           Data.Time.Clock                 (NominalDiffTime, diffUTCTime,
+import           Control.Monad.Trans.Control     (MonadBaseControl)
+import           Control.Monad.Trans.Maybe
+import           Data.IORef                      (IORef, readIORef, writeIORef)
+import           Data.Time.Clock                 (NominalDiffTime, UTCTime, diffUTCTime,
                                                   getCurrentTime)
-import           Data.Time.Format                (defaultTimeLocale, parseTimeM)
+import           GHC.AssertNF
+import           Network.URI                     (URI)
 
-import           Hasura.Logging                  (Logger (..))
+import           Data.Aeson.Internal             (JSONPath)
+import           Data.Parser.CacheControl
+import           Data.Parser.Expires
+import           Hasura.HTTP
+import           Hasura.Logging                  (Hasura, LogLevel (..), Logger (..))
 import           Hasura.Prelude
 import           Hasura.RQL.Types
 import           Hasura.Server.Auth.JWT.Internal (parseHmacKey, parseRsaKey)
 import           Hasura.Server.Auth.JWT.Logging
-import           Hasura.Server.Utils             (accessKeyHeader, bsToTxt,
-                                                  userRoleHeader)
+import           Hasura.Server.Utils             (executeJSONPath, getRequestHeader,
+                                                  isSessionVariable, userRoleHeader)
+import           Hasura.Server.Version           (HasVersion)
+import           Hasura.Session
+import qualified Hasura.Tracing                  as Tracing
 
-import qualified Control.Concurrent              as C
-import qualified Data.Aeson                      as A
-import qualified Data.Aeson.Casing               as A
-import qualified Data.Aeson.TH                   as A
+import qualified Control.Concurrent.Extended     as C
+import qualified Crypto.JWT                      as Jose
+import qualified Data.Aeson                      as J
+import qualified Data.Aeson.Casing               as J
+import qualified Data.Aeson.Internal             as J
+import qualified Data.Aeson.TH                   as J
 import qualified Data.ByteString.Lazy            as BL
 import qualified Data.ByteString.Lazy.Char8      as BLC
 import qualified Data.CaseInsensitive            as CI
 import qualified Data.HashMap.Strict             as Map
-import qualified Data.String.Conversions         as CS
+import qualified Data.Parser.JSONPath            as JSONPath
 import qualified Data.Text                       as T
+import qualified Data.Text.Encoding              as T
 import qualified Network.HTTP.Client             as HTTP
 import qualified Network.HTTP.Types              as HTTP
-import qualified Network.URI                     as N
 import qualified Network.Wreq                    as Wreq
-
 
 newtype RawJWT = RawJWT BL.ByteString
 
+data JWTClaimsFormat
+  = JCFJson
+  | JCFStringifiedJson
+  deriving (Show, Eq)
+
+$(J.deriveJSON J.defaultOptions { J.sumEncoding = J.ObjectWithSingleField
+                                , J.constructorTagModifier = J.snakeCase . drop 3 } ''JWTClaimsFormat)
+
+data JWTConfigClaims
+  = ClaimNsPath JSONPath
+  | ClaimNs T.Text
+  deriving (Show, Eq)
+
+instance J.ToJSON JWTConfigClaims where
+  toJSON (ClaimNsPath nsPath) = J.String . T.pack $ encodeJSONPath nsPath
+  toJSON (ClaimNs ns)         = J.String ns
+
+-- | The JWT configuration we got from the user.
 data JWTConfig
   = JWTConfig
-  { jcType     :: !T.Text
-  , jcKeyOrUrl :: !(Either JWK N.URI)
-  , jcClaimNs  :: !(Maybe T.Text)
-  , jcAudience :: !(Maybe T.Text)
-  -- , jcIssuer   :: !(Maybe T.Text)
+  { jcKeyOrUrl     :: !(Either Jose.JWK URI)
+  , jcClaimNs      :: !JWTConfigClaims
+  , jcAudience     :: !(Maybe Jose.Audience)
+  , jcClaimsFormat :: !(Maybe JWTClaimsFormat)
+  , jcIssuer       :: !(Maybe Jose.StringOrURI)
   } deriving (Show, Eq)
 
+-- | The validated runtime JWT configuration returned by 'mkJwtCtx' in 'setupAuthMode'.
+--
+-- This is also evidence that the 'jwkRefreshCtrl' thread is running, if an
+-- expiration schedule could be determined.
 data JWTCtx
   = JWTCtx
-  { jcxKey      :: !(IORef JWKSet)
-  , jcxClaimNs  :: !(Maybe T.Text)
-  , jcxAudience :: !(Maybe T.Text)
-  } deriving (Show, Eq)
+  { jcxKey          :: !(IORef Jose.JWKSet)
+    -- ^ This needs to be a mutable variable for 'updateJwkRef'.
+  , jcxClaimNs      :: !JWTConfigClaims
+  , jcxAudience     :: !(Maybe Jose.Audience)
+  , jcxClaimsFormat :: !JWTClaimsFormat
+  , jcxIssuer       :: !(Maybe Jose.StringOrURI)
+  } deriving (Eq)
 
-instance Show (IORef JWKSet) where
-  show _ = "<IORef JWKRef>"
+instance Show JWTCtx where
+  show (JWTCtx _ nsM audM cf iss) =
+    show ["<IORef JWKSet>", show nsM,show audM, show cf, show iss]
 
 data HasuraClaims
   = HasuraClaims
   { _cmAllowedRoles :: ![RoleName]
   , _cmDefaultRole  :: !RoleName
   } deriving (Show, Eq)
-$(A.deriveJSON (A.aesonDrop 3 A.snakeCase) ''HasuraClaims)
+$(J.deriveJSON (J.aesonDrop 3 J.snakeCase) ''HasuraClaims)
 
+
+-- NOTE: these must stay lowercase; TODO consider using "Data.CaseInsensitive"
 allowedRolesClaim :: T.Text
 allowedRolesClaim = "x-hasura-allowed-roles"
 
@@ -86,144 +124,236 @@ defaultRoleClaim = "x-hasura-default-role"
 defaultClaimNs :: T.Text
 defaultClaimNs = "https://hasura.io/jwt/claims"
 
--- | create a background thread to refresh the JWK
-jwkRefreshCtrl
-  :: (MonadIO m)
-  => Logger
-  -> HTTP.Manager
-  -> N.URI
-  -> IORef JWKSet
-  -> NominalDiffTime
-  -> m ()
-jwkRefreshCtrl lggr mngr url ref time =
-  void $ liftIO $ C.forkIO $ do
-    C.threadDelay $ delay time
-    forever $ do
-      res <- runExceptT $ updateJwkRef lggr mngr url ref
-      mTime <- either (const $ return Nothing) return res
-      C.threadDelay $ maybe (60 * aSecond) delay mTime
-  where
-    delay t = (floor (realToFrac t :: Double) - 10) * aSecond
-    aSecond = 1000 * 1000
 
+-- | An action that refreshes the JWK at intervals in an infinite loop.
+jwkRefreshCtrl
+  :: (HasVersion, MonadIO m, MonadBaseControl IO m, Tracing.HasReporter m)
+  => Logger Hasura
+  -> HTTP.Manager
+  -> URI
+  -> IORef Jose.JWKSet
+  -> DiffTime
+  -> m void
+jwkRefreshCtrl logger manager url ref time = do
+    liftIO $ C.sleep time
+    forever $ Tracing.runTraceT "jwk refresh" do
+      res <- runExceptT $ updateJwkRef logger manager url ref
+      mTime <- either (const $ logNotice >> return Nothing) return res
+      -- if can't parse time from header, defaults to 1 min
+      -- let delay = maybe (minutes 1) fromUnits mTime
+      let delay = maybe (minutes 1) (convertDuration) mTime
+      liftIO $ C.sleep delay
+  where
+    logNotice = do
+      let err = JwkRefreshLog LevelInfo (Just "retrying again in 60 secs") Nothing
+      liftIO $ unLogger logger err
 
 -- | Given a JWK url, fetch JWK from it and update the IORef
 updateJwkRef
-  :: ( MonadIO m
-     , MonadError T.Text m)
-  => Logger
+  :: ( HasVersion
+     , MonadIO m
+     , MonadBaseControl IO m
+     , MonadError JwkFetchError m
+     , Tracing.MonadTrace m
+     )
+  => Logger Hasura
   -> HTTP.Manager
-  -> N.URI
-  -> IORef JWKSet
+  -> URI
+  -> IORef Jose.JWKSet
   -> m (Maybe NominalDiffTime)
 updateJwkRef (Logger logger) manager url jwkRef = do
-  let options = Wreq.defaults
-              & Wreq.checkResponse ?~ (\_ _ -> return ())
-              & Wreq.manager .~ Right manager
-
-  res  <- liftIO $ try $ Wreq.getWith options $ show url
+  let urlT    = T.pack $ show url
+      infoMsg = "refreshing JWK from endpoint: " <> urlT
+  liftIO $ logger $ JwkRefreshLog LevelInfo (Just infoMsg) Nothing
+  res <- try $ do
+    initReq <- liftIO $ HTTP.parseRequest $ show url
+    let req = initReq { HTTP.requestHeaders = addDefaultHeaders (HTTP.requestHeaders initReq) }
+    Tracing.tracedHttpRequest req \req' -> do
+      liftIO $ HTTP.httpLbs req' manager
   resp <- either logAndThrowHttp return res
   let status = resp ^. Wreq.responseStatus
       respBody = resp ^. Wreq.responseBody
+      statusCode = status ^. Wreq.statusCode
 
-  when (status ^. Wreq.statusCode /= 200) $ do
-    let urlT = T.pack $ show url
-        respBodyT = Just $ CS.cs respBody
-        errMsg = "non-200 response on fetching JWK from: " <> urlT
-        httpErr = Just (JwkRefreshHttpError (Just status) urlT Nothing respBodyT)
-    logAndThrow errMsg httpErr
+  unless (statusCode >= 200 && statusCode < 300) $ do
+    let errMsg = "Non-2xx response on fetching JWK from: " <> urlT
+        err = JFEHttpError url status respBody errMsg
+    logAndThrow err
 
-  jwkset <- either (\e -> logAndThrow (T.pack e) Nothing) return . A.eitherDecode $ respBody
-  liftIO $ modifyIORef jwkRef (const jwkset)
+  let parseErr e = JFEJwkParseError (T.pack e) $ "Error parsing JWK from url: " <> urlT
+  !jwkset <- either (logAndThrow . parseErr) return $ J.eitherDecode' respBody
+  liftIO $ do
+    $assertNFHere jwkset  -- so we don't write thunks to mutable vars
+    writeIORef jwkRef jwkset
 
-  let mExpiresT = resp ^? Wreq.responseHeader "Expires"
-  forM mExpiresT $ \expiresT -> do
-    let expiresE = parseTimeM True defaultTimeLocale timeFmt $ CS.cs expiresT
-    expires  <- either (`logAndThrow` Nothing) return expiresE
-    currTime <- liftIO getCurrentTime
-    return $ diffUTCTime expires currTime
+  -- first check for Cache-Control header to get max-age, if not found, look for Expires header
+  runMaybeT $ timeFromCacheControl resp <|> timeFromExpires resp
 
   where
-    logAndThrow :: (MonadIO m, MonadError T.Text m) => T.Text -> Maybe JwkRefreshHttpError -> m a
-    logAndThrow err httpErr = do
-      liftIO $ logger $ mkJwkRefreshLog err httpErr
+    parseCacheControlErr e =
+      JFEExpiryParseError (Just e)
+      "Failed parsing Cache-Control header from JWK response. Could not find max-age or s-maxage"
+    parseTimeErr =
+      JFEExpiryParseError Nothing
+      "Failed parsing Expires header from JWK response. Value of header is not a valid timestamp"
+
+    timeFromCacheControl resp = do
+      header <- afold $ bsToTxt <$> resp ^? Wreq.responseHeader "Cache-Control"
+      fromInteger <$> parseMaxAge header `onLeft` \err -> logAndThrowInfo $ parseCacheControlErr $ T.pack err
+    timeFromExpires resp = do
+      header <- afold $ bsToTxt <$> resp ^? Wreq.responseHeader "Expires"
+      expiry <- parseExpirationTime header `onLeft` const (logAndThrowInfo parseTimeErr)
+      diffUTCTime expiry <$> liftIO getCurrentTime
+
+    logAndThrowInfo :: (MonadIO m, MonadError JwkFetchError m) => JwkFetchError -> m a
+    logAndThrowInfo err = do
+      liftIO $ logger $ JwkRefreshLog LevelInfo Nothing (Just err)
       throwError err
 
-    logAndThrowHttp :: (MonadIO m, MonadError T.Text m) => HTTP.HttpException -> m a
-    logAndThrowHttp err = do
-      let httpErr = JwkRefreshHttpError Nothing (T.pack $ show url) (Just err) Nothing
-          errMsg = "error fetching JWK: " <> T.pack (show err)
-      logAndThrow errMsg (Just httpErr)
+    logAndThrow :: (MonadIO m, MonadError JwkFetchError m) => JwkFetchError -> m a
+    logAndThrow err = do
+      liftIO $ logger $ JwkRefreshLog (LevelOther "critical") Nothing (Just err)
+      throwError err
 
-    timeFmt = "%a, %d %b %Y %T GMT"
+    logAndThrowHttp :: (MonadIO m, MonadError JwkFetchError m) => HTTP.HttpException -> m a
+    logAndThrowHttp httpEx = do
+      let errMsg = "Error fetching JWK: " <> T.pack (getHttpExceptionMsg httpEx)
+          err = JFEHttpException (HttpException httpEx) errMsg
+      logAndThrow err
+
+    getHttpExceptionMsg = \case
+      HTTP.HttpExceptionRequest _ reason -> show reason
+      HTTP.InvalidUrlException _ reason -> show reason
 
 
 -- | Process the request headers to verify the JWT and extract UserInfo from it
+--
+-- Iff no "Authorization" header was passed, we will fall back to the
+-- unauthenticated user role [1], if one was configured at server start.
+--
+-- When no 'x-hasura-user-role' is specified in the request, the mandatory
+-- 'x-hasura-default-role' [2] from the JWT claims will be used.
+
+-- [1]: https://hasura.io/docs/1.0/graphql/manual/auth/authentication/unauthenticated-access.html 
+-- [2]: https://hasura.io/docs/1.0/graphql/manual/auth/authentication/jwt.html#the-spec
 processJwt
   :: ( MonadIO m
      , MonadError QErr m)
   => JWTCtx
   -> HTTP.RequestHeaders
-  -> m UserInfo
-processJwt jwtCtx headers = do
+  -> Maybe RoleName
+  -> m (UserInfo, Maybe UTCTime)
+processJwt = processJwt_ processAuthZHeader
+
+-- Broken out for testing with mocks:
+processJwt_
+  :: (MonadError QErr m)
+  => (_JWTCtx -> BLC.ByteString -> m (J.Object, Maybe UTCTime))
+  -- ^ mock 'processAuthZHeader'
+  -> _JWTCtx
+  -> HTTP.RequestHeaders
+  -> Maybe RoleName
+  -> m (UserInfo, Maybe UTCTime)
+processJwt_ processAuthZHeader_ jwtCtx headers mUnAuthRole =
+  maybe withoutAuthZHeader withAuthZHeader mAuthZHeader
+  where
+    mAuthZHeader = find (\h -> fst h == CI.mk "Authorization") headers
+
+    withAuthZHeader (_, authzHeader) = do
+      (hasuraClaims, expTimeM) <- processAuthZHeader_ jwtCtx $ BL.fromStrict authzHeader
+
+      -- filter only x-hasura claims and convert to lower-case
+      let claimsMap = Map.filterWithKey (\k _ -> isSessionVariable k)
+                    $ Map.fromList $ map (first T.toLower)
+                    $ Map.toList hasuraClaims
+
+      HasuraClaims allowedRoles defaultRole <- parseHasuraClaims claimsMap
+      -- see if there is a x-hasura-role header, or else pick the default role.
+      -- The role returned is unauthenticated at this point:
+      let requestedRole = fromMaybe defaultRole $
+            getRequestHeader userRoleHeader headers >>= mkRoleName . bsToTxt
+
+      when (requestedRole `notElem` allowedRoles) $
+        throw400 AccessDenied "Your requested role is not in allowed roles"
+      let finalClaims =
+            Map.delete defaultRoleClaim . Map.delete allowedRolesClaim $ claimsMap
+
+      -- transform the map of text:aeson-value -> text:text
+      metadata <- parseJwtClaim (J.Object finalClaims) "x-hasura-* claims"
+      userInfo <- mkUserInfo (URBPreDetermined requestedRole) UAdminSecretNotSent $
+                  mkSessionVariablesText $ Map.toList metadata
+      pure (userInfo, expTimeM)
+
+    withoutAuthZHeader = do
+      unAuthRole <- maybe missingAuthzHeader return mUnAuthRole
+      userInfo <- mkUserInfo (URBPreDetermined unAuthRole) UAdminSecretNotSent $
+        mkSessionVariables headers
+      pure (userInfo, Nothing)
+
+      where
+        missingAuthzHeader =
+          throw400 InvalidHeaders "Missing Authorization header in JWT authentication mode"
+
+-- Parse and verify the 'Authorization' header, returning the raw claims
+-- object, and the expiration, if any.
+processAuthZHeader
+  :: ( MonadIO m
+     , MonadError QErr m)
+  => JWTCtx
+  -> BLC.ByteString
+  -> m (J.Object, Maybe UTCTime)
+processAuthZHeader jwtCtx@JWTCtx{jcxClaimNs, jcxClaimsFormat} authzHeader = do
   -- try to parse JWT token from Authorization header
   jwt <- parseAuthzHeader
 
   -- verify the JWT
   claims <- liftJWTError invalidJWTError $ verifyJwt jwtCtx $ RawJWT jwt
 
-  let claimsNs = fromMaybe defaultClaimNs $ jcxClaimNs jwtCtx
+  let expTimeM = fmap (\(Jose.NumericDate t) -> t) $ claims ^. Jose.claimExp
 
-  -- see if the hasura claims key exist in the claims map
-  let mHasuraClaims = Map.lookup claimsNs $ claims ^. unregisteredClaims
+  -- see if the hasura claims key exists in the claims map
+  let mHasuraClaims =
+        case jcxClaimNs of
+          ClaimNs k -> Map.lookup k $ claims ^. Jose.unregisteredClaims
+          ClaimNsPath path -> parseIValueJsonValue $ executeJSONPath path (J.toJSON $ claims ^. Jose.unregisteredClaims)
+
   hasuraClaimsV <- maybe claimsNotFound return mHasuraClaims
-  -- the value of hasura claims key has to be an object
-  hasuraClaims <- validateIsObject hasuraClaimsV
-
-  -- filter only x-hasura claims and convert to lower-case
-  let claimsMap = Map.filterWithKey (\k _ -> T.isPrefixOf "x-hasura-" k)
-                $ Map.fromList $ map (\(k, v) -> (T.toLower k, v))
-                $ Map.toList hasuraClaims
-
-  HasuraClaims allowedRoles defaultRole <- parseHasuraClaims claimsMap
-  let role = getCurrentRole defaultRole
-
-  when (role `notElem` allowedRoles) currRoleNotAllowed
-  let finalClaims =
-        Map.delete defaultRoleClaim . Map.delete allowedRolesClaim $ claimsMap
-
-  -- transform the map of text:aeson-value -> text:text
-  metadata <- decodeJSON $ A.Object finalClaims
-
-  -- delete the x-hasura-access-key from this map, and insert x-hasura-role
-  let hasuraMd = Map.insert userRoleHeader (getRoleTxt role) $
-        Map.delete accessKeyHeader metadata
-
-  return $ UserInfo role hasuraMd
+  -- return hasura claims value as an object. parse from string possibly
+  (, expTimeM) <$> parseObjectFromString hasuraClaimsV
 
   where
     parseAuthzHeader = do
-      let mAuthzHeader = find (\h -> fst h == CI.mk "Authorization") headers
-      (_, authzHeader) <- maybe missingAuthzHeader return mAuthzHeader
-      let tokenParts = BLC.words $ BL.fromStrict authzHeader
+      let tokenParts = BLC.words authzHeader
       case tokenParts of
         ["Bearer", jwt] -> return jwt
         _               -> malformedAuthzHeader
 
-    validateIsObject jVal =
-      case jVal of
-        A.Object x -> return x
-        _          -> throw400 JWTInvalidClaims "hasura claims should be an object"
+    parseObjectFromString jVal =
+      case (jcxClaimsFormat, jVal) of
+        (JCFStringifiedJson, J.String v) ->
+          either (const $ claimsErr $ strngfyErr v) return
+          $ J.eitherDecodeStrict $ T.encodeUtf8 v
+        (JCFStringifiedJson, _) ->
+          claimsErr "expecting a string when claims_format is stringified_json"
+        (JCFJson, J.Object o) -> return o
+        (JCFJson, _) ->
+          claimsErr "expecting a json object when claims_format is json"
 
-    -- see if there is a x-hasura-role header, or else pick the default role
-    getCurrentRole defaultRole =
-      let userRoleHeaderB = CS.cs userRoleHeader
-          mUserRole = snd <$> find (\h -> fst h == CI.mk userRoleHeaderB) headers
-      in maybe defaultRole (RoleName . bsToTxt) mUserRole
+    strngfyErr v =
+      "expecting stringified json at: '"
+      <> claimsLocation
+      <> "', but found: " <> v
+      where
+        claimsLocation :: Text
+        claimsLocation =
+          case jcxClaimNs of
+            ClaimNsPath path -> T.pack $ "claims_namespace_path " <> encodeJSONPath path
+            ClaimNs ns       -> "claims_namespace " <> ns
 
-    decodeJSON val = case A.fromJSON val of
-      A.Error e   -> throw400 JWTInvalidClaims ("x-hasura-* claims: " <> T.pack e)
-      A.Success a -> return a
+    claimsErr = throw400 JWTInvalidClaims
+
+    parseIValueJsonValue (J.IError _ _) = Nothing
+    parseIValueJsonValue (J.ISuccess v) = Just v
 
     liftJWTError :: (MonadError e' m) => (e -> e') -> ExceptT e m a -> m a
     liftJWTError ef action = do
@@ -235,86 +365,104 @@ processJwt jwtCtx headers = do
 
     malformedAuthzHeader =
       throw400 InvalidHeaders "Malformed Authorization header"
-    missingAuthzHeader =
-      throw400 InvalidHeaders "Missing Authorization header in JWT authentication mode"
-    currRoleNotAllowed =
-      throw400 AccessDenied "Your current role is not in allowed roles"
     claimsNotFound = do
-      let claimsNs = fromMaybe defaultClaimNs $ jcxClaimNs jwtCtx
-      throw400 JWTInvalidClaims $ "claims key: '" <> claimsNs <> "' not found"
+      let claimsNsError = case jcxClaimNs of
+                            ClaimNsPath path -> T.pack $ "claims not found at claims_namespace_path: '"
+                                                <> encodeJSONPath path <> "'"
+                            ClaimNs ns -> "claims key: '" <> ns <> "' not found"
+      throw400 JWTInvalidClaims claimsNsError
 
 
 -- parse x-hasura-allowed-roles, x-hasura-default-role from JWT claims
-parseHasuraClaims
-  :: (MonadError QErr m)
-  => A.Object -> m HasuraClaims
+parseHasuraClaims :: forall m. (MonadError QErr m) => J.Object -> m HasuraClaims
 parseHasuraClaims claimsMap = do
-  let mAllowedRolesV = Map.lookup allowedRolesClaim claimsMap
-  allowedRolesV <- maybe missingAllowedRolesClaim return mAllowedRolesV
-  allowedRoles <- parseJwtClaim (A.fromJSON allowedRolesV) errMsg
-
-  let mDefaultRoleV = Map.lookup defaultRoleClaim claimsMap
-  defaultRoleV <- maybe missingDefaultRoleClaim return mDefaultRoleV
-  defaultRole <- parseJwtClaim (A.fromJSON defaultRoleV) errMsg
-
-  return $ HasuraClaims allowedRoles defaultRole
+  HasuraClaims <$> 
+    parseClaim allowedRolesClaim "should be a list of roles" <*> 
+    parseClaim defaultRoleClaim  "should be a single role name"
 
   where
-    missingAllowedRolesClaim =
-      let msg = "JWT claim does not contain " <> allowedRolesClaim
-      in throw400 JWTRoleClaimMissing msg
-
-    missingDefaultRoleClaim =
-      let msg = "JWT claim does not contain " <> defaultRoleClaim
-      in throw400 JWTRoleClaimMissing msg
-
-    errMsg _ = "invalid " <> allowedRolesClaim <> "; should be a list of roles"
-
-    parseJwtClaim :: (MonadError QErr m) => A.Result a -> (String -> Text) -> m a
-    parseJwtClaim res errFn =
-      case res of
-        A.Success val -> return val
-        A.Error e     -> throw400 JWTInvalidClaims $ errFn e
-
+    parseClaim :: J.FromJSON a => Text -> Text -> m a
+    parseClaim claim hint = do
+      claimV <- maybe missingClaim return $ Map.lookup claim claimsMap
+      parseJwtClaim claimV $ "invalid " <> claim <> "; " <> hint
+      where
+        missingClaim = throw400 JWTRoleClaimMissing $ "JWT claim does not contain " <> claim
 
 -- | Verify the JWT against given JWK
 verifyJwt
-  :: ( MonadError JWTError m
+  :: ( MonadError Jose.JWTError m
      , MonadIO m
      )
   => JWTCtx
   -> RawJWT
-  -> m ClaimsSet
+  -> m Jose.ClaimsSet
 verifyJwt ctx (RawJWT rawJWT) = do
   key <- liftIO $ readIORef $ jcxKey ctx
-  jwt <- decodeCompact rawJWT
+  jwt <- Jose.decodeCompact rawJWT
   t   <- liftIO getCurrentTime
-  verifyClaimsAt config key t jwt
+  Jose.verifyClaimsAt config key t jwt
   where
-    audCheck aud = maybe True (== (T.pack . show) aud) $ jcxAudience ctx
-    config = defaultJWTValidationSettings audCheck
+    config = case jcxIssuer ctx of
+      Nothing  -> Jose.defaultJWTValidationSettings audCheck
+      Just iss -> Jose.defaultJWTValidationSettings audCheck
+                  & set Jose.issuerPredicate (== iss)
+    audCheck audience =
+      -- dont perform the check if there are no audiences in the conf
+      case jcxAudience ctx of
+        Nothing                        -> True
+        Just (Jose.Audience audiences) -> audience `elem` audiences
 
+
+instance J.ToJSON JWTConfig where
+  toJSON (JWTConfig keyOrUrl claimNs aud claimsFmt iss) =
+    J.object (jwkFields ++ sharedFields ++ claimsNsFields)
+    where
+      jwkFields = case keyOrUrl of
+        Left _    -> [ "type" J..= J.String "<TYPE REDACTED>"
+                     , "key" J..= J.String "<JWK REDACTED>" ]
+        Right url -> [ "jwk_url" J..= url ]
+
+      claimsNsFields = case claimNs of
+        ClaimNsPath nsPath ->
+          ["claims_namespace_path" J..= encodeJSONPath nsPath]
+        ClaimNs ns -> ["claims_namespace" J..= J.String ns]
+
+      sharedFields = [ "claims_format" J..= claimsFmt
+                     , "audience" J..= aud
+                     , "issuer" J..= iss
+                     ]
 
 -- | Parse from a json string like:
 -- | `{"type": "RS256", "key": "<PEM-encoded-public-key-or-X509-cert>"}`
 -- | to JWTConfig
-instance A.FromJSON JWTConfig where
+instance J.FromJSON JWTConfig where
 
-  parseJSON = A.withObject "JWTConfig" $ \o -> do
-    keyType <- o A..: "type"
-    mRawKey <- o A..:? "key"
-    claimNs <- o A..:? "claims_namespace"
-    aud     <- o A..:? "audience"
-    jwkUrl  <- o A..:? "jwk_url"
+  parseJSON = J.withObject "JWTConfig" $ \o -> do
+    mRawKey <- o J..:? "key"
+    claimsNs <- o J..:? "claims_namespace"
+    claimsNsPath <- o J..:? "claims_namespace_path"
+    aud     <- o J..:? "audience"
+    iss     <- o J..:? "issuer"
+    jwkUrl  <- o J..:? "jwk_url"
+    isStrngfd <- o J..:? "claims_format"
+
+
+    hasuraClaimsNs <-
+      case (claimsNsPath,claimsNs) of
+        (Nothing, Nothing) -> return $ ClaimNs defaultClaimNs
+        (Just nsPath, Nothing) -> either failJSONPathParsing (return . ClaimNsPath) . JSONPath.parseJSONPath $ nsPath
+        (Nothing, Just ns) -> return $ ClaimNs ns
+        (Just _, Just _) -> fail "claims_namespace and claims_namespace_path both cannot be set"
 
     case (mRawKey, jwkUrl) of
       (Nothing, Nothing) -> fail "key and jwk_url both cannot be empty"
       (Just _, Just _)   -> fail "key, jwk_url both cannot be present"
       (Just rawKey, Nothing) -> do
+        keyType <- o J..: "type"
         key <- parseKey keyType rawKey
-        return $ JWTConfig keyType (Left key) claimNs aud
+        return $ JWTConfig (Left key) hasuraClaimsNs aud isStrngfd iss
       (Nothing, Just url) ->
-        return $ JWTConfig keyType (Right url) claimNs aud
+        return $ JWTConfig (Right url) hasuraClaimsNs aud isStrngfd iss
 
     where
       parseKey keyType rawKey =
@@ -329,4 +477,16 @@ instance A.FromJSON JWTConfig where
           _       -> invalidJwk ("Key type: " <> T.unpack keyType <> " is not supported")
 
       runEither = either (invalidJwk . T.unpack) return
+
       invalidJwk msg = fail ("Invalid JWK: " <> msg)
+
+      failJSONPathParsing err = fail $ "invalid JSON path claims_namespace_path error: " ++ err
+
+
+-- Utility:
+parseJwtClaim :: (J.FromJSON a, MonadError QErr m) => J.Value -> Text -> m a
+parseJwtClaim v errMsg =
+  case J.fromJSON v of
+    J.Success val -> return val
+    J.Error e     -> throw400 JWTInvalidClaims $ errMsg <> ": " <> T.pack e
+

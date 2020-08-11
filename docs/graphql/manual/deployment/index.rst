@@ -1,31 +1,64 @@
-Deploying Hasura GraphQL Engine
+.. meta::
+   :description: Deploy Hasura GraphQL engine
+   :keywords: hasura, docs, deployment
+
+.. _deployment:
+
+Deploying Hasura GraphQL engine
 ===============================
 
-.. note::
-  This section talks in depth about deploying the Hasura GraphQL engine for a **production like environment**.
-  If you would simply like to take the Hasura GraphQL engine for a quick spin, choose from our
-  :doc:`Getting started guides <../getting-started/index>`.
+.. contents:: Table of contents
+  :backlinks: none
+  :depth: 1
+  :local:
 
-The Hasura GraphQL engine is a binary that is shipped as a Docker container.
+Deployment guides
+-----------------
 
-Choose from the following guides to deploy the Hasura GraphQL engine and connect it to a Postgres database:
+This section contains guides to deploy the Hasura GraphQL engine and connect it to a Postgres database.
 
-- :doc:`Deploy using Heroku <heroku/index>`
-- :doc:`Deploy using Docker <docker/index>`
-- :doc:`Deploy using Kubernetes <kubernetes/index>`
+If you're looking for quick deployment options, check out the following guides:
 
-You can also check :doc:`../guides/deployment/index` for more specific examples.
+- :ref:`One-click deployment guides <one_click_deployment_guides>`
+
+The following is a list of all deployment guides:
+
+- :ref:`Deployment guides <all_deployment_guides>`
+
+.. admonition:: Custom Docker images or binaries
+
+  If you need a custom Docker image or binary for GraphQL engine, please see :ref:`this page <custom_docker_image>`.
+
+
+Configuration
+-------------
 
 By default, Hasura GraphQL engine runs in a very permissive mode for easier development. Check out the below pages
-to configure Hasura GraphQL engine for your production environment:
+to configure the Hasura GraphQL engine for your production environment:
 
-- :doc:`securing-graphql-endpoint`
-- :doc:`postgres-permissions`
-- :doc:`GraphQL engine server configuration <graphql-engine-flags/index>`
+- :ref:`GraphQL engine server configuration <hge_flags>`
+- :ref:`Postgres requirements <postgres_permissions>`
+- :ref:`Securing the GraphQL endpoint <securing_graphql_endpoint>`
+- :ref:`Enable HTTPS <enable_https>`
+- :ref:`Allow-list of operations <allow_list>`
+- :ref:`HTTP compression <http_compression>`
+- :ref:`Updating GraphQL engine <update_hge>`
+- :ref:`Downgrading GraphQL engine <downgrade_hge>`
+
+
+Logs
+----
 
 For access to Hasura GraphQL engine logs, check the below page for details:
 
-- :doc:`Logging <logging>`
+- :ref:`Logging <hge_logs>`
+
+Production checklist
+--------------------
+
+If you're moving your Hasura GraphQL engine to production, consult the following guide:
+
+- :ref:`Production checklist <production_checklist>`
 
 
 .. toctree::
@@ -33,11 +66,15 @@ For access to Hasura GraphQL engine logs, check the below page for details:
    :titlesonly:
    :hidden:
 
-   Using Heroku <heroku/index>
-   Using Docker <docker/index>
-   Using Kubernetes <kubernetes/index>
-   securing-graphql-endpoint
-   postgres-permissions
-   GraphQL engine server configuration <graphql-engine-flags/index>
-   GraphQL engine server logs <logging>
-   Updating GraphQL engine <updating>
+   Deployment guides <deployment-guides/index>
+   Server configuration <graphql-engine-flags/index>
+   postgres-requirements
+   Securing GraphQL endpoint <securing-graphql-endpoint>
+   Server logs <logging>
+   Enable HTTPS <enable-https>
+   allow-list
+   HTTP Compression <compression>
+   Production checklist <production-checklist>
+   Custom Docker images or binaries <custom-docker-images>
+   Updating GraphQL engine <updating-graphql-engine>
+   Downgrading GraphQL engine <downgrading>

@@ -1,6 +1,9 @@
 __pycache__/
 dist
+dist-newstyle/
 cabal-dev
+Pipfile
+Pipfile.lock
 *.o
 *.hi
 *.chi
@@ -8,17 +11,22 @@ cabal-dev
 *.dyn_o
 *.dyn_hi
 .virtualenv
+.python-venv
 .hpc
 *.tix
 .hsenv
 .cabal-sandbox/
+.ghc.environment*
 cabal.sandbox.config
 cabal.config
+# Configurable for local dev/experimentation:
+cabal.project.local*
 *.prof*
 *.aux
 *.hp
 TAGS
 .stack-work*
+*.log
 
 # ws related
 ws/

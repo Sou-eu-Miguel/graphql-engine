@@ -1,47 +1,307 @@
-export const boolOperators = {
-  and: '_and',
-  not: '_not',
-  or: '_or',
+/* Constants */
+
+// TODO: generate using SQL query to handle all types
+export const PGTypes = {
+  boolean: ['boolean'],
+  character: ['character', 'character varying', 'text', 'citext'],
+  dateTime: [
+    'timestamp',
+    'timestamp with time zone',
+    'timestamp without time zone',
+    'date',
+    'time',
+    'time with time zone',
+    'time without time zone',
+    'interval',
+  ],
+  geometry: ['geometry'],
+  geography: ['geography'],
+  json: ['json'],
+  jsonb: ['jsonb'],
+  numeric: [
+    'smallint',
+    'integer',
+    'bigint',
+    'decimal',
+    'numeric',
+    'real',
+    'double precision',
+  ],
+  uuid: ['uuid'],
+  user_defined: [], // default for all other types
 };
 
-export const columnOperators = [
-  '_eq',
-  '_ne',
-  '_in',
-  '_nin',
-  '_gt',
-  '_lt',
-  '_gte',
-  '_lte',
-  '_like',
-  '_nlike',
-  '_similar',
-  '_nsimilar',
-  '_is_null',
-];
-
-export const arrayColumnOperators = ['_in', '_nin'];
-
-export const boolColumnOperators = ['_is_null'];
-
-export const legacyOperatorsMap = {
-  $and: '_and',
-  $or: '_or',
-  $not: '_not',
-  $eq: '_eq',
-  $ne: '_ne',
-  $in: '_in',
-  $nin: '_nin',
-  $gt: '_gt',
-  $lt: '_lt',
-  $gte: '_gte',
-  $lte: '_lte',
-  $like: '_like',
-  $nlike: '_nlike',
-  $similar: '_similar',
-  $nsimilar: '_nsimilar',
-  $is_null: '_is_null',
+const operatorTypePGTypesMap = {
+  comparision: [
+    'boolean',
+    'character',
+    'dateTime',
+    'numeric',
+    'uuid',
+    'user_defined',
+  ],
+  pattern_match: ['character'],
+  jsonb: ['jsonb'],
+  geometric: ['geometry'],
+  geometric_geographic: ['geometry', 'geography'],
+  is_null: Object.keys(PGTypes), // all types
 };
+
+const boolOperatorsInfo = {
+  _and: {
+    type: 'bool',
+    inputStructure: 'array',
+  },
+  _or: {
+    type: 'bool',
+    inputStructure: 'array',
+  },
+  _not: {
+    type: 'bool',
+    inputStructure: 'object',
+  },
+};
+
+const columnOperatorsInfo = {
+  _eq: {
+    type: 'comparision',
+    inputStructure: 'object',
+  },
+  _ne: {
+    type: 'comparision',
+    inputStructure: 'object',
+  },
+  _in: {
+    type: 'comparision',
+    inputStructure: 'array',
+  },
+  _nin: {
+    type: 'comparision',
+    inputStructure: 'array',
+  },
+  _gt: {
+    type: 'comparision',
+    inputStructure: 'object',
+  },
+  _lt: {
+    type: 'comparision',
+    inputStructure: 'object',
+  },
+  _gte: {
+    type: 'comparision',
+    inputStructure: 'object',
+  },
+  _lte: {
+    type: 'comparision',
+    inputStructure: 'object',
+  },
+  _ceq: {
+    type: 'comparision',
+    inputStructure: 'object',
+    inputType: 'column',
+  },
+  _cne: {
+    type: 'comparision',
+    inputStructure: 'object',
+    inputType: 'column',
+  },
+  _cgt: {
+    type: 'comparision',
+    inputStructure: 'object',
+    inputType: 'column',
+  },
+  _clt: {
+    type: 'comparision',
+    inputStructure: 'object',
+    inputType: 'column',
+  },
+  _cgte: {
+    type: 'comparision',
+    inputStructure: 'object',
+    inputType: 'column',
+  },
+  _clte: {
+    type: 'comparision',
+    inputStructure: 'object',
+    inputType: 'column',
+  },
+  _is_null: {
+    type: 'is_null',
+    inputStructure: 'object',
+    inputType: 'boolean',
+  },
+  _like: {
+    type: 'pattern_match',
+    inputStructure: 'object',
+  },
+  _nlike: {
+    type: 'pattern_match',
+    inputStructure: 'object',
+  },
+  _ilike: {
+    type: 'pattern_match',
+    inputStructure: 'object',
+  },
+  _nilike: {
+    type: 'pattern_match',
+    inputStructure: 'object',
+  },
+  _similar: {
+    type: 'pattern_match',
+    inputStructure: 'object',
+  },
+  _nsimilar: {
+    type: 'pattern_match',
+    inputStructure: 'object',
+  },
+  _contains: {
+    type: 'jsonb',
+    inputStructure: 'object',
+  },
+  _contained_in: {
+    type: 'jsonb',
+    inputStructure: 'object',
+  },
+  _has_key: {
+    type: 'jsonb',
+    inputStructure: 'object',
+    inputType: 'character',
+  },
+  _has_keys_any: {
+    type: 'jsonb',
+    inputStructure: 'array',
+    inputType: 'character',
+  },
+  _has_keys_all: {
+    type: 'jsonb',
+    inputStructure: 'array',
+    inputType: 'character',
+  },
+  _st_contains: {
+    type: 'geometric',
+    inputStructure: 'object',
+  },
+  _st_crosses: {
+    type: 'geometric',
+    inputStructure: 'object',
+    inputType: 'json',
+  },
+  _st_equals: {
+    type: 'geometric',
+    inputStructure: 'object',
+    inputType: 'json',
+  },
+  _st_overlaps: {
+    type: 'geometric',
+    inputStructure: 'object',
+    inputType: 'json',
+  },
+  _st_touches: {
+    type: 'geometric',
+    inputStructure: 'object',
+    inputType: 'json',
+  },
+  _st_within: {
+    type: 'geometric',
+    inputStructure: 'object',
+    inputType: 'json',
+  },
+  _st_d_within: {
+    type: 'geometric_geographic',
+    inputStructure: 'object',
+    inputType: 'json',
+  },
+  _st_intersects: {
+    type: 'geometric_geographic',
+    inputStructure: 'object',
+    inputType: 'json',
+  },
+};
+
+const getPGTypesOperators = () => {
+  const _PGTypesOperators = {};
+
+  Object.keys(columnOperatorsInfo).forEach(op => {
+    operatorTypePGTypesMap[columnOperatorsInfo[op].type].forEach(type => {
+      _PGTypesOperators[type] = _PGTypesOperators[type] || [];
+      _PGTypesOperators[type].push(op);
+    });
+  });
+
+  return _PGTypesOperators;
+};
+
+export const PGTypesOperators = getPGTypesOperators();
+
+export const boolOperators = Object.keys(boolOperatorsInfo);
+
+const columnOperators = Object.keys(columnOperatorsInfo);
+
+export const existOperators = ['_exists'];
+
+export const allOperators = boolOperators
+  .concat(columnOperators)
+  .concat(existOperators);
+
+export const TABLE_KEY = '_table';
+export const WHERE_KEY = '_where';
+
+/* Util functions */
+
+export const isBoolOperator = operator => {
+  return boolOperators.includes(operator);
+};
+
+export const isExistOperator = operator => {
+  return existOperators.includes(operator);
+};
+
+export const isArrayBoolOperator = operator => {
+  const arrayBoolOperators = Object.keys(boolOperatorsInfo).filter(
+    op => boolOperatorsInfo[op].inputStructure === 'array'
+  );
+
+  return arrayBoolOperators.includes(operator);
+};
+
+export const isColumnOperator = operator => {
+  return columnOperators.includes(operator);
+};
+
+export const isArrayColumnOperator = operator => {
+  const arrayColumnOperators = Object.keys(columnOperatorsInfo).filter(
+    op => columnOperatorsInfo[op].inputStructure === 'array'
+  );
+
+  return arrayColumnOperators.includes(operator);
+};
+
+export const getOperatorInputType = operator => {
+  return columnOperatorsInfo[operator]
+    ? columnOperatorsInfo[operator].inputType
+    : null;
+};
+
+export const getRootPGType = type => {
+  let rootType;
+
+  for (const rType of Object.keys(PGTypes)) {
+    if (PGTypes[rType].includes(type)) {
+      rootType = rType;
+      break;
+    }
+  }
+
+  if (!rootType) {
+    rootType = 'user_defined';
+  }
+
+  return rootType;
+};
+
+export function getLegacyOperator(operator) {
+  return operator.replace('_', '$');
+}
 
 export function addToPrefix(prefix, value) {
   let _newPrefix;
@@ -59,60 +319,4 @@ export function addToPrefix(prefix, value) {
   }
 
   return _newPrefix;
-}
-
-export function getTableColumnNames(tableSchema) {
-  if (!tableSchema) {
-    return [];
-  }
-
-  return tableSchema.columns.map(c => c.column_name);
-}
-
-export function getTableRelationshipNames(tableSchema) {
-  if (!tableSchema) {
-    return [];
-  }
-
-  return tableSchema.relationships.map(r => r.rel_name);
-}
-
-export function getTableRelationship(tableSchema, relName) {
-  if (!tableSchema) {
-    return {};
-  }
-
-  return tableSchema.relationships[
-    getTableRelationshipNames(tableSchema).indexOf(relName)
-  ];
-}
-
-export function getRefTable(rel, schema) {
-  let _refTable = null;
-
-  if (rel.rel_type === 'array') {
-    if (rel.rel_def.foreign_key_constraint_on) {
-      _refTable = rel.rel_def.foreign_key_constraint_on.table;
-    } else if (rel.rel_def.manual_configuration) {
-      _refTable = rel.rel_def.manual_configuration.remote_table;
-    }
-  }
-
-  if (rel.rel_type === 'object') {
-    if (rel.rel_def.foreign_key_constraint_on) {
-      const fkCol = rel.rel_def.foreign_key_constraint_on;
-
-      for (let i = 0; i < schema.foreign_key_constraints.length; i++) {
-        const fkConstraint = schema.foreign_key_constraints[i];
-        if (fkCol === Object.keys(fkConstraint.column_mapping)[0]) {
-          _refTable = fkConstraint.ref_table;
-          break;
-        }
-      }
-    } else if (rel.rel_def.manual_configuration) {
-      _refTable = rel.rel_def.manual_configuration.remote_table;
-    }
-  }
-
-  return _refTable;
 }

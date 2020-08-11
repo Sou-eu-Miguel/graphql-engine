@@ -1,10 +1,21 @@
+.. meta::
+   :description: Schema design basics in Hasura
+   :keywords: hasura, docs, schema, basics
+
+.. _schema_basics:
+
 Schema design basics
 ====================
+
+.. contents:: Table of contents
+  :backlinks: none
+  :depth: 1
+  :local:
 
 The Hasura GraphQL engine creates GraphQL schema object types and corresponding query/mutation fields with resolvers
 automatically as we create tables/views in the Postgres database.
 
-Let's take a look at how to create tables using the Hasura console, a UI tool meant for doing exactly this, and what
+Let's take a look at how to create tables using the Hasura console, a UI tool meant for doing exactly this, and the
 GraphQL schema it generates.
 
 Let's say we want to create two simple tables for an article/author schema:
@@ -12,17 +23,19 @@ Let's say we want to create two simple tables for an article/author schema:
 .. code-block:: sql
 
   author (
-    id INT PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     name TEXT
   )
 
   article (
-    id INT PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     title TEXT,
     content TEXT,
     rating INT,
     author_id INT
   )
+
+.. _create-tables:
 
 Create tables
 -------------
@@ -35,9 +48,10 @@ automatically generated.
 
 For example, here is the schema for the ``article`` table in this interface:
 
-.. image:: ../../../img/graphql/manual/schema/create-table-graphql.png
+.. thumbnail:: /img/graphql/manual/schema/create-table-graphql.png
+   :alt: Schema for an article table
 
-The following *object type* and *query/mutation* fields are generated for the ``article`` table we just created:
+The following object type and query/mutation fields are generated for the ``article`` table we just created:
 
 .. code-block:: graphql
 
@@ -76,12 +90,15 @@ The following *object type* and *query/mutation* fields are generated for the ``
     where: article_bool_exp!
   ): article_mutation_response
 
-See the :doc:`API reference <../api-reference/index>` for more details.
+See the :ref:`query <graphql_api_query>` and :ref:`mutation <graphql_api_mutation>`
+API references for the full specifications.
 
-Try basic GraphQL queries
--------------------------
-At this point, you should be able to try out basic GraphQL queries/mutations on the newly created tables using the
-console ``GraphiQL`` tab (*you may want to add some test data in the tables first*).
+You can insert some sample data into the tables using the ``Insert Row`` tab of the created tables.
+
+Try out basic GraphQL queries
+-----------------------------
+At this point, you should be able to try out basic GraphQL queries/mutations on the newly created tables
+from the GraphiQL tab in the console (*you may want to add some sample data into the tables first*).
 
 Here are a couple of examples:
 
@@ -133,17 +150,29 @@ Here are a couple of examples:
     mutation add_author {
       insert_author(
         objects: [
-          {id: 11, name: "Jane"}
+          { name: "Jane" }
         ]
       ) {
         affected_rows
+        returning {
+          id
+          name
+        }
       }
     }
   :response:
     {
       "data": {
         "insert_author": {
-          "affected_rows": 1
+          "affected_rows": 1,
+          "returning": [
+            {
+              "id": 11,
+              "name": "Jane"
+            }
+          ]
         }
       }
     }
+    
+Note that the author's ``id`` does not need to passed as an input as it is of type ``serial`` (auto incrementing integer).

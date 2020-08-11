@@ -1,7 +1,6 @@
 /**
  * THIS IS THE ENTRY POINT FOR THE CLIENT, JUST LIKE server.js IS THE ENTRY POINT FOR THE SERVER.
  */
-// import 'babel-polyfill';
 
 import React from 'react';
 import ReactDOM from 'react-dom';
@@ -19,13 +18,36 @@ import getRoutes from './routes';
 
 import reducer from './reducer';
 import globals from './Globals';
+import { trackReduxAction } from './telemetry';
+
+function analyticsLogger({ getState }) {
+  return next => action => {
+    // Call the next dispatch method in the middleware chain.
+    const returnValue = next(action);
+
+    // check if analytics tracking is enabled
+    if (globals.enableTelemetry) {
+      trackReduxAction(action, getState);
+    }
+    // This will likely be the action itself, unless
+    // a middleware further in chain changed it.
+    return returnValue;
+  };
+}
+
+/** telemetry: end **/
 
 // Create the store
 let _finalCreateStore;
 
 if (__DEVELOPMENT__) {
   const tools = [
-    applyMiddleware(thunk, routerMiddleware(browserHistory), createLogger()),
+    applyMiddleware(
+      thunk,
+      routerMiddleware(browserHistory),
+      createLogger({ diff: true, duration: true }),
+      analyticsLogger
+    ),
     require('redux-devtools').persistState(
       window.location.href.match(/[?&]debug_session=([^&]+)\b/)
     ),
@@ -36,7 +58,7 @@ if (__DEVELOPMENT__) {
   _finalCreateStore = compose(...tools)(createStore);
 } else {
   _finalCreateStore = compose(
-    applyMiddleware(thunk, routerMiddleware(browserHistory))
+    applyMiddleware(thunk, routerMiddleware(browserHistory), analyticsLogger)
   )(createStore);
 }
 
@@ -71,24 +93,31 @@ const history = syncHistoryWithStore(browserHistory, store);
 
 // Enable hot reloading
 if (__DEVELOPMENT__ && module.hot) {
+  /*
   module.hot.accept('./reducer', () => {
     store.replaceReducer(require('./reducer'));
   });
+  */
+  module.hot.accept();
 }
-
 // Main routes and rendering
-const main = (
-  <Router
-    history={useBasename(() => history)({ basename: globals.urlPrefix })}
-    routes={getRoutes(store)}
-    onUpdate={hashLinkScroll}
-  />
-);
+const Main = () => {
+  const routeHistory = useBasename(() => history)({
+    basename: globals.urlPrefix,
+  });
+  return (
+    <Router
+      history={routeHistory}
+      routes={getRoutes(store)}
+      onUpdate={hashLinkScroll}
+    />
+  );
+};
 
 const dest = document.getElementById('content');
 ReactDOM.render(
   <Provider store={store} key="provider">
-    {main}
+    <Main />
   </Provider>,
   dest
 );

@@ -1,12 +1,9 @@
-{-# LANGUAGE ScopedTypeVariables #-}
-
 module Hasura.SQL.Time
     ( ZonedTimeOfDay(..)
     ) where
 
 import           Data.Attoparsec.Text as A
 import           Data.Attoparsec.Time (timeOfDay, timeZone)
-import           Data.Maybe           (fromMaybe)
 import           Hasura.Prelude
 
 import qualified Data.Aeson.Types     as Aeson

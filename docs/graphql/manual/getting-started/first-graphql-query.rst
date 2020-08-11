@@ -1,7 +1,18 @@
+.. meta::
+   :description: Make a first GraphQL query with Hasura
+   :keywords: hasura, docs, start, query, graphql
+
+.. _first_graphql_query:
+
 Making your first GraphQL query
 ===============================
 
-Let's create a sample table and query from it using the Hasura console, a UI tool meant for doing exactly this:
+.. contents:: Table of contents
+  :backlinks: none
+  :depth: 1
+  :local:
+
+Let's create a sample table and query data from it using the Hasura console, a UI tool meant for doing exactly this:
 
 Create a table
 --------------
@@ -9,29 +20,17 @@ Create a table
 Head to the Hasura console, navigate to ``Data -> Create table`` and create a sample table called ``profile`` with
 the following columns:
 
-+----------+----------+
-|   **profile**       |
-+----------+----------+
-| id       | integer  |
-+----------+----------+
-| name     | text     |
-+----------+----------+
+.. code-block:: sql
 
-.. image:: ../../../img/graphql/manual/getting-started/create-profile-table.png
+  profile (
+    id SERIAL PRIMARY KEY, -- serial -> auto-incrementing integer
+    name TEXT
+  )
 
-Insert some sample data into the table:
+.. thumbnail:: /img/graphql/manual/getting-started/create-profile-table.png
+   :alt: Create a table
 
-+-----------+------------+
-| **id**    | **name**   |
-+-----------+------------+
-| 1         |  john      |
-+-----------+------------+
-| 2         |  shruti    |
-+-----------+------------+
-| 3         |  celine    |
-+-----------+------------+
-| 4         |  raj       |
-+-----------+------------+
+Now, insert some sample data into the table using the ``Insert Row`` tab of the ``profile`` table.
 
 Try out a query
 ---------------
@@ -49,13 +48,14 @@ Head to the ``GraphiQL`` tab in the console and try running the following query:
 
 You'll see that you get all the inserted data!
 
-.. image:: ../../../img/graphql/manual/getting-started/profile-query.png
+.. thumbnail:: /img/graphql/manual/getting-started/profile-query.png
+   :alt: Try out a query
 
 Next steps
 ----------
 
 Read more about:
 
-- :doc:`Building your schema <../schema/index>`
-- :doc:`Queries <../queries/index>`
+- :ref:`Building your schema <schema>`
+- :ref:`Queries <queries>`
 

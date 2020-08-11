@@ -1,8 +1,18 @@
+.. meta::
+   :description: Use relationships with the Hasura schema/metadata API
+   :keywords: hasura, docs, schema/metadata API, API reference, relationship
+
+.. _api_relationship:
+
 Schema/Metadata API Reference: Relationships
 ============================================
 
-Relationships are used to capture the connectedness of data amongst tables.
-In general, when retrieving data from tables, it is very helpful if we can also
+.. contents:: Table of contents
+  :backlinks: none
+  :depth: 1
+  :local:
+
+When retrieving data from tables, it is very helpful if we can also
 fetch the related data alongside the columns. This is where relationships come
 in. They can be considered as pseudo columns for a table to access the related
 data.
@@ -12,7 +22,7 @@ For a simple ``article/author`` schema, the following relationships exist:
 - ``author`` of an ``article``
 - ``articles`` of an ``author``
 
-As you may have noticed, there are two kinds of relationships:
+There are two kinds of relationships:
 
 - one-to-one or ``object relationships`` (e.g. ``author``).
 - one-to-many or ``array relationships`` (e.g. ``articles``).
@@ -59,7 +69,7 @@ Create an ``object relationship`` ``author`` on ``article`` *table*,  *using* th
 This is an advanced feature which is mostly used to define relationships on or
 to views. We cannot rely on foreign key constraints as they are not valid to or
 from views. So, when using manual configuration, we have to specify the remote
-table and how each of the columns in this table are mapped to the columns of the
+table and how columns in this table are mapped to the columns of the
 remote table. 
 
 Let's say we have a view called ``article_detail`` which has three columns
@@ -121,7 +131,7 @@ Args syntax
    * - using
      - true
      - ObjRelUsing_
-     - Use one of the available ways to define object relationship
+     - Use one of the available ways to define an object relationship
    * - comment
      - false
      - text
@@ -129,8 +139,8 @@ Args syntax
 
 .. _ObjRelUsing:
 
-``ObjRelUsing``
-&&&&&&&&&&&&&&&
+ObjRelUsing
+&&&&&&&&&&&
 
 .. list-table::
    :header-rows: 1
@@ -151,11 +161,11 @@ Args syntax
 .. note::
 
    There has to be at least one and only one of ``foreign_key_constraint_on``
-   and ``manual_mapping``. 
+   and ``manual_configuration``. 
 
 
-``ObjRelUsingManualMapping``
-&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+ObjRelUsingManualMapping
+&&&&&&&&&&&&&&&&&&&&&&&&
 
 .. list-table::
    :header-rows: 1
@@ -166,11 +176,11 @@ Args syntax
      - Description
    * - remote_table
      - true
-     - :ref:`TableName <TableName>`
+     - :ref:`TableName`
      - The table to which the relationship has to be established
    * - column_mapping
      - true
-     - Object (:ref:`PGColumn <PGColumn>` : :ref:`PGColumn <PGColumn>`)
+     - Object (:ref:`PGColumn` : :ref:`PGColumn`)
      - Mapping of columns from current table to remote table
 
 .. _create_array_relationship:
@@ -216,7 +226,7 @@ Create an ``array relationship`` ``articles`` on ``author`` *table*,  *using* th
 This is an advanced feature which is mostly used to define relationships on or
 to views. We cannot rely on foreign key constraints as they are not valid to or
 from views. So, when using manual configuration, we have to specify the remote
-table and how each of the columns in this table are mapped to the columns of the
+table and how columns in this table are mapped to the columns of the
 remote table.
 
 Let's say we have a view called ``article_detail`` which has four columns
@@ -251,7 +261,7 @@ follows:
    It is easy to make mistakes while using ``manual_configuration``.
    One simple check is to ensure that foreign key constraint semantics are valid
    on the columns being used in ``column_mapping``. In the previous example, if
-   it was allowed, a foreign key constraint could have been defined on
+   it was allowed, a foreign key constraint could have been defined on the
    ``author`` table's ``id`` column to ``article_detail`` view's ``author_id``
    column.
 
@@ -269,16 +279,16 @@ Args syntax
      - Description
    * - table
      - true
-     - :ref:`TableName <TableName>`
+     - :ref:`TableName`
      - Name of the table
    * - name
      - true
-     - :ref:`RelationshipName <RelationshipName>`
+     - :ref:`RelationshipName`
      - Name of the new relationship
    * - using
      - true
      - ArrRelUsing_
-     - Use one of the available ways to define array relationship
+     - Use one of the available ways to define an array relationship
    * - comment
      - false
      - text
@@ -286,8 +296,8 @@ Args syntax
 
 .. _ArrRelUsing:
 
-``ArrRelUsing``
-&&&&&&&&&&&&&&&
+ArrRelUsing
+&&&&&&&&&&&
 
 .. list-table::
    :header-rows: 1
@@ -300,13 +310,13 @@ Args syntax
      - false
      - ArrRelUsingFKeyOn_
      - The column with foreign key constraint
-   * - manual_mapping
+   * - manual_configuration
      - false
      - ArrRelUsingManualMapping_
      - Manual mapping of table and columns
 
-``ArrRelUsingFKeyOn``
-&&&&&&&&&&&&&&&&&&&&&
+ArrRelUsingFKeyOn
+&&&&&&&&&&&&&&&&&
 
 .. list-table::
    :header-rows: 1
@@ -317,15 +327,15 @@ Args syntax
      - Description
    * - table
      - true
-     - :ref:`TableName <TableName>`
+     - :ref:`TableName`
      - Name of the table
    * - column
      - true
-     - :ref:`PGColumn <PGColumn>`
+     - :ref:`PGColumn`
      - Name of the column with foreign key constraint
 
-``ArrRelUsingManualMapping``
-&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+ArrRelUsingManualMapping
+&&&&&&&&&&&&&&&&&&&&&&&&
 
 .. list-table::
    :header-rows: 1
@@ -336,11 +346,11 @@ Args syntax
      - Description
    * - remote_table
      - true
-     - :ref:`TableName <TableName>`
+     - :ref:`TableName`
      - The table to which the relationship has to be established
    * - column_mapping
      - true
-     - Object (:ref:`PGColumn <PGColumn>` : :ref:`PGColumn <PGColumn>`)
+     - Object (:ref:`PGColumn` : :ref:`PGColumn`)
      - Mapping of columns from current table to remote table
 
 .. _drop_relationship:
@@ -350,7 +360,7 @@ drop_relationship
 
 ``drop_relationship`` is used to drop a relationship (both object and array) on
 a table. If there are other objects dependent on this relationship like
-permissions and query templates, the query will fail reporting the dependencies
+permissions and query templates, etc., the request will fail and report the dependencies
 unless ``cascade`` is set to ``true``. If ``cascade`` is set to ``true``, the
 dependent objects are also dropped. 
 
@@ -384,11 +394,11 @@ Args syntax
      - Description
    * - table
      - true
-     - :ref:`TableName <TableName>`
+     - :ref:`TableName`
      - Name of the table
-   * - name
+   * - relationship
      - true
-     - :ref:`RelationshipName <RelationshipName>`
+     - :ref:`RelationshipName`
      - Name of the relationship that needs to be dropped
    * - cascade
      - false
@@ -397,7 +407,7 @@ Args syntax
 
 .. note::
 
-   Be careful when using ``cascade``. First, try running the query without
+   Be careful when using ``cascade``. First, try running the request without
    ``cascade`` or ``cascade`` set to ``false``.
 
 .. _set_relationship_comment:
@@ -439,13 +449,62 @@ Args syntax
      - Description
    * - table
      - true
-     - :ref:`TableName <TableName>`
+     - :ref:`TableName`
      - Name of the table
-   * - name
+   * - relationship
      - true
-     - :ref:`RelationshipName <RelationshipName>`
+     - :ref:`RelationshipName`
      - The relationship
    * - comment
      - false
      - Text
-     - comment
+     - Comment
+
+.. _rename_relationship:
+
+rename_relationship
+-------------------
+
+``rename_relationship`` is used to modify the name of an existing relationship.
+
+An example:
+
+.. code-block:: http
+
+   POST /v1/query HTTP/1.1
+   Content-Type: application/json
+   X-Hasura-Role: admin
+
+   {
+       "type": "rename_relationship",
+       "args": {
+           "table": "article",
+           "name": "article_details",
+           "new_name": "article_detail"
+       }
+   }
+
+.. _rename_relationship_syntax:
+
+Args syntax
+^^^^^^^^^^^
+
+.. list-table::
+   :header-rows: 1
+
+   * - Key
+     - Required
+     - Schema
+     - Description
+   * - table
+     - true
+     - :ref:`TableName`
+     - Name of the table
+   * - name
+     - true
+     - :ref:`RelationshipName`
+     - The relationship
+   * - new_name
+     - true
+     - :ref:`RelationshipName`
+     - New relationship name

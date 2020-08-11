@@ -1,37 +1,30 @@
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module Hasura.GraphQL.Utils
-  ( onNothing
-  , showName
+  ( showName
   , showNamedTy
   , throwVE
   , getBaseTy
-  , mapFromL
   , groupTuples
   , groupListWith
   , mkMapWith
-  , onLeft
   , showNames
-  , isValidName
+  , unwrapTy
+  , simpleGraphQLQuery
+  , jsonValueToGValue
   ) where
 
-import           Hasura.RQL.Types
 import           Hasura.Prelude
+import           Hasura.RQL.Types.Error
 
+import           Data.Scientific               (floatingOrInteger)
+
+import qualified Data.Aeson                    as A
 import qualified Data.HashMap.Strict           as Map
 import qualified Data.List.NonEmpty            as NE
 import qualified Data.Text                     as T
 import qualified Language.GraphQL.Draft.Syntax as G
-import qualified Text.Regex                    as R
 
 showName :: G.Name -> Text
 showName name = "\"" <> G.unName name <> "\""
-
-onNothing :: (Monad m) => Maybe a -> m a -> m a
-onNothing m act = maybe act return m
 
 throwVE :: (MonadError QErr m) => Text -> m a
 throwVE = throw400 ValidationFailed
@@ -42,18 +35,16 @@ showNamedTy nt =
 
 getBaseTy :: G.GType -> G.NamedType
 getBaseTy = \case
-  G.TypeNamed n     -> n
-  G.TypeList lt     -> getBaseTyL lt
-  G.TypeNonNull nnt -> getBaseTyNN nnt
+  G.TypeNamed _ n     -> n
+  G.TypeList _ lt     -> getBaseTyL lt
   where
     getBaseTyL = getBaseTy . G.unListType
-    getBaseTyNN = \case
-      G.NonNullTypeList lt -> getBaseTyL lt
-      G.NonNullTypeNamed n -> n
 
-mapFromL :: (Eq k, Hashable k) => (a -> k) -> [a] -> Map.HashMap k a
-mapFromL f l =
-  Map.fromList [(f v, v) | v <- l]
+unwrapTy :: G.GType -> G.GType
+unwrapTy =
+  \case
+    G.TypeList _ lt -> G.unListType lt
+    nt -> nt
 
 groupListWith
   :: (Eq k, Hashable k, Foldable t, Functor t)
@@ -83,16 +74,22 @@ mkMapWith f l =
     mapG = groupListWith f l
     dups = Map.keys $ Map.filter ((> 1) . length) mapG
 
-onLeft :: (Monad m) => Either e a -> (e -> m a) -> m a
-onLeft e f = either f return e
-
 showNames :: (Foldable t) => t G.Name -> Text
 showNames names =
   T.intercalate ", " $ map G.unName $ toList names
 
--- Ref: http://facebook.github.io/graphql/June2018/#sec-Names
-isValidName :: G.Name -> Bool
-isValidName =
-  isJust . R.matchRegex regex . T.unpack . G.unName
-  where
-    regex = R.mkRegex "^[_a-zA-Z][_a-zA-Z0-9]*$"
+-- A simple graphql query to be used in generators
+simpleGraphQLQuery :: Text
+simpleGraphQLQuery = "query {author {id name}}"
+
+-- | Convert a JSON value to a GraphQL value.
+jsonValueToGValue :: A.Value -> G.Value
+jsonValueToGValue = \case
+  A.String t -> G.VString $ G.StringValue t
+  -- TODO: Note the danger zone of scientific:
+  A.Number n -> either (\(_::Float) -> G.VFloat n) G.VInt (floatingOrInteger n)
+  A.Bool b -> G.VBoolean b
+  A.Object o -> G.VObject $ G.ObjectValueG $
+    map (uncurry G.ObjectFieldG . (G.Name *** jsonValueToGValue)) $ Map.toList o
+  A.Array a -> G.VList $ G.ListValueG $ map jsonValueToGValue $ toList a
+  A.Null -> G.VNull

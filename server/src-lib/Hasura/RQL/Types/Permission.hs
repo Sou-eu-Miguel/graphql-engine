@@ -1,78 +1,31 @@
-{-# LANGUAGE DeriveGeneric              #-}
-{-# LANGUAGE DeriveLift                 #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase                 #-}
-{-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE TemplateHaskell            #-}
-
 module Hasura.RQL.Types.Permission
-       ( RoleName(..)
-       , UserId(..)
-       , UserInfo(..)
-       , adminUserInfo
-       , adminRole
-       , isAdmin
-       , PermType(..)
-       , permTypeToCode
-       , PermId(..)
-       ) where
+  ( PermType(..)
+  , permTypeToCode
+  , PermId(..)
+  ) where
 
+import           Hasura.Incremental         (Cacheable)
 import           Hasura.Prelude
+import           Hasura.Session
 import           Hasura.SQL.Types
 
-import qualified Database.PG.Query          as Q
-
 import           Data.Aeson
-import qualified Data.Aeson                 as J
-import qualified Data.Aeson.Casing          as J
-import qualified Data.Aeson.TH              as J
 import           Data.Hashable
-import           Data.Word
 import           Instances.TH.Lift          ()
 import           Language.Haskell.TH.Syntax (Lift)
 
-import qualified Data.HashMap.Strict        as Map
 import qualified Data.Text                  as T
+import qualified Database.PG.Query          as Q
 import qualified PostgreSQL.Binary.Decoding as PD
-
-newtype RoleName
-  = RoleName {getRoleTxt :: T.Text}
-  deriving ( Show, Eq, Hashable, FromJSONKey, ToJSONKey, FromJSON
-           , ToJSON, Q.FromCol, Q.ToPrepArg, Lift)
-
-instance DQuote RoleName where
-  dquoteTxt (RoleName r) = r
-
-adminRole :: RoleName
-adminRole = RoleName "admin"
-
-isAdmin :: RoleName -> Bool
-isAdmin = (adminRole ==)
-
-newtype UserId = UserId { getUserId :: Word64 }
-  deriving (Show, Eq, FromJSON, ToJSON)
-
-data UserInfo
-  = UserInfo
-  { userRole    :: !RoleName
-  , userHeaders :: !(Map.HashMap T.Text T.Text)
-  } deriving (Show, Eq, Generic)
-
-instance Hashable UserInfo
-
-$(J.deriveJSON (J.aesonDrop 4 J.camelCase){J.omitNothingFields=True}
-  ''UserInfo
- )
-
-adminUserInfo :: UserInfo
-adminUserInfo = UserInfo adminRole Map.empty
 
 data PermType
   = PTInsert
   | PTSelect
   | PTUpdate
   | PTDelete
-  deriving (Eq, Lift)
+  deriving (Eq, Lift, Generic)
+instance NFData PermType
+instance Cacheable PermType
 
 instance Q.FromCol PermType where
   fromCol bs = flip Q.fromColHelper bs $ PD.enum $ \case
@@ -120,7 +73,7 @@ instance Show PermId where
     show $ mconcat
     [ getTableTxt tn
     , "."
-    , getRoleTxt rn
+    , roleNameToTxt rn
     , "."
     , T.pack $ show pType
     ]

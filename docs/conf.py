@@ -20,59 +20,41 @@
 import os
 import sys
 from os.path import abspath, dirname, join
+
 sys.setrecursionlimit(2000)
 
 # Monkey patching StandaloneHTMLBuilder as to not include unnecessary scripts
 
 from sphinx.builders.html import StandaloneHTMLBuilder
+from docutils.parsers.rst.directives.admonitions import BaseAdmonition
+from sphinx.util import compat
+compat.make_admonition = BaseAdmonition
+
 # from sphinx.util.osutil import relative_uri
-StandaloneHTMLBuilder.script_files = ["_static/vendor.js"]
+StandaloneHTMLBuilder.script_files = ["_static/scripts/vendor.js"]
 # StandaloneHTMLBuilder.imgpath = relative_uri("v0.13", '_images')
 
 # Defaults to development
 CURRENT_ENV = os.getenv("ENV") if os.getenv("ENV") else "development"
-BASE_DOMAIN = os.getenv("BASE_DOMAIN", "development")
-
-# Algolia variables
-ALGOLIA_SECRETS = {
-    "development": {
-        "APPLICATION_ID": "WCBB1VVLRC",
-        "APPLICATION_SEARCH_KEY": "a50259f1da0f835fbb5e4d421b97b2de",
-        "ALGOLIA_INDEX_NAME": "stg_graphql_docs_search",
-    },
-    "production": {
-        "APPLICATION_ID": "WCBB1VVLRC",
-        "APPLICATION_SEARCH_KEY": "dea0d2c67378878fad5678396a532c95",
-        "ALGOLIA_INDEX_NAME": "graphql_docs_search",
-    }
-}
-
-ALGOLIA_APPLICATION_ID = ALGOLIA_SECRETS[CURRENT_ENV]["APPLICATION_ID"]
-ALGOLIA_SEARCH_KEY = ALGOLIA_SECRETS[CURRENT_ENV]["APPLICATION_SEARCH_KEY"]
-# Get from env if set
-if os.getenv("ALGOLIA_APPLICATION_ID") and os.getenv("ALGOLIA_SEARCH_KEY"):
-    ALGOLIA_APPLICATION_ID = os.getenv("ALGOLIA_APPLICATION_ID")
-    ALGOLIA_SEARCH_KEY = os.getenv("ALGOLIA_SEARCH_KEY")
-
-ALGOLIA_INDEX_NAME = ALGOLIA_SECRETS[CURRENT_ENV]["ALGOLIA_INDEX_NAME"]
-# Get from env if set
-if os.getenv("ALGOLIA_INDEX_NAME"):
-    ALGOLIA_INDEX_NAME = os.getenv("ALGOLIA_INDEX_NAME")
+RELEASE_MODE = os.getenv("RELEASE_MODE", "development")
 
 # GraphiQL defaults
-GRAPHIQL_DEFAULT_ENDPOINT = "https://data.accouterments35.hasura-app.io/v1alpha1/graphql"
+GRAPHIQL_DEFAULT_ENDPOINT = "http://localhost:8080/v1/graphql"
+
 # Get from env if set
 if os.getenv("GRAPHIQL_DEFAULT_ENDPOINT"):
     GRAPHIQL_DEFAULT_ENDPOINT = os.getenv("GRAPHIQL_DEFAULT_ENDPOINT")
 
+BASE_DOMAIN = "hasura.io" if RELEASE_MODE == "production" else "hasura-stg.hasura-app.io"
+
+SITEMAP_DOMAIN = BASE_DOMAIN + '/docs'
+
 # set context
 html_context = {
-    "SITEMAP_DOMAIN": "https://docs.hasura.io/",
-    "BASE_DOMAIN": "hasura.io" if BASE_DOMAIN == "production" else "hasura-stg.hasura-app.io",
+    "BASE_DOMAIN": BASE_DOMAIN,
+    "RELEASE_MODE": RELEASE_MODE,
+    "SITEMAP_DOMAIN": SITEMAP_DOMAIN,
     "GRAPHIQL_DEFAULT_ENDPOINT": GRAPHIQL_DEFAULT_ENDPOINT,
-    "ALGOLIA_APPLICATION_ID": ALGOLIA_APPLICATION_ID,
-    "ALGOLIA_SEARCH_KEY": ALGOLIA_SEARCH_KEY,
-    "ALGOLIA_INDEX_NAME": ALGOLIA_INDEX_NAME
 }
 
 # End of it
@@ -100,13 +82,17 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinxcontrib.swaggerdoc",
     "sphinxcontrib.httpdomain",
+    "sphinxcontrib.images",
     "sphinx.ext.todo",
-    "global_tabs",
     "sphinx_tabs.tabs",
     "graphiql",
     "lexer_jsx",
     "lexer_graphql",
 ]
+
+images_config = {
+    "default_image_width": "auto"
+}
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -138,7 +124,7 @@ version = 'x.y'
 # The full version, including alpha/beta/rc tags.
 release = 'x.y'
 
-#epilog rst lines for frequently reference links in docs
+# epilog rst lines for frequently reference links in docs
 rst_epilog = """
 """
 
@@ -185,7 +171,6 @@ exclude_patterns = ['_build', 'venv', 'Thumbs.db', '.DS_Store']
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
 
-
 # A list of ignored prefixes for module index sorting.
 # modindex_common_prefix = []
 
@@ -194,7 +179,6 @@ pygments_style = 'sphinx'
 
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = True
-
 
 # -- Options for HTML output ----------------------------------------------
 # import sphinx_rtd_theme
@@ -205,7 +189,7 @@ html_theme = "djangodocs"
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-#html_theme = 'alabaster'
+# html_theme = 'alabaster'
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
@@ -215,7 +199,7 @@ html_theme = "djangodocs"
 
 # Add any paths that contain custom themes here, relative to this directory.
 html_theme_path = ["_theme"]
-# html_title = '| Hasura ' + version + ' documentation'
+html_title = 'Hasura GraphQL Docs'
 
 # The name for this set of Sphinx documents.
 # "<project> v<release> documentation" by default.
@@ -235,7 +219,7 @@ html_theme_path = ["_theme"]
 # the docs.  This file should be a Windows icon file (.ico) being 16x16 or 32x32
 # pixels large.
 #
-html_favicon = "img/layout/favicon.png"
+html_favicon = "img/layout/favicon_yellow.png"
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
@@ -296,7 +280,7 @@ html_show_copyright = True
 # contain a <link> tag referring to it.  The value of this option must be the
 # base URL from which the finished HTML is served.
 #
-# html_use_opensearch = ''
+html_use_opensearch = 'https://hasura.io/docs'
 
 # This is the file name suffix for HTML files (e.g. ".xhtml").
 # html_file_suffix = None
@@ -325,21 +309,21 @@ htmlhelp_basename = 'Hasuradoc'
 # -- Options for LaTeX output ---------------------------------------------
 
 latex_elements = {
-     # The paper size ('letterpaper' or 'a4paper').
-     #
-     # 'papersize': 'letterpaper',
+    # The paper size ('letterpaper' or 'a4paper').
+    #
+    # 'papersize': 'letterpaper',
 
-     # The font size ('10pt', '11pt' or '12pt').
-     #
-     # 'pointsize': '10pt',
+    # The font size ('10pt', '11pt' or '12pt').
+    #
+    # 'pointsize': '10pt',
 
-     # Additional stuff for the LaTeX preamble.
-     #
-     # 'preamble': '',
+    # Additional stuff for the LaTeX preamble.
+    #
+    # 'preamble': '',
 
-     # Latex figure (float) alignment
-     #
-     # 'figure_align': 'htbp',
+    # Latex figure (float) alignment
+    #
+    # 'figure_align': 'htbp',
 }
 
 # Grouping the document tree into LaTeX files. List of tuples

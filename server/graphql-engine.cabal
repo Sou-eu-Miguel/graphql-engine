@@ -1,36 +1,76 @@
+cabal-version:       2.2
+
 name:                graphql-engine
 version:             1.0.0
 synopsis:            GraphQL API over Postgres
--- description:
 homepage:            https://www.hasura.io
-license:             AGPL-3.0
--- license-file:        LICENSE.md
+license:             Apache-2.0
 author:              Vamshi Surabhi
 maintainer:          vamshi@hasura.io
-copyright:           2017-2018 Hasura Techonologies Pvt. Ltd
+copyright:           Hasura Inc.
 category:            Database
 build-type:          Simple
--- extra-source-files:  README.md
-cabal-version:       >=1.10
 
 source-repository head
   type:     git
   location: https://github.com/hasura/graphql-engine
 
 flag developer
-  description: operate in developer mode
+  description: Enable support for development-only APIs
   default: False
   manual: True
 
+common common-all
+  ghc-options:
+    -fmax-simplifier-iterations=20 -foptimal-applicative-do
+    -Wall -Wcompat -Wincomplete-record-updates -Wincomplete-uni-patterns -Wredundant-constraints
+
+  if flag(developer)
+    cpp-options: -DDeveloperAPIs
+
+  default-language: Haskell2010
+  default-extensions:
+    ApplicativeDo BangPatterns BlockArguments ConstraintKinds DataKinds DefaultSignatures DeriveDataTypeable
+    DeriveFoldable DeriveFunctor DeriveGeneric DeriveLift DeriveTraversable DerivingVia EmptyCase
+    FlexibleContexts FlexibleInstances FunctionalDependencies GeneralizedNewtypeDeriving
+    InstanceSigs LambdaCase MultiParamTypeClasses MultiWayIf NamedFieldPuns NoImplicitPrelude
+    OverloadedStrings QuantifiedConstraints QuasiQuotes RankNTypes RecordWildCards ScopedTypeVariables
+    StandaloneDeriving TemplateHaskell TupleSections TypeApplications TypeFamilies TypeOperators
+    RecordWildCards
+
+common common-exe
+  ghc-options:
+    -threaded -rtsopts
+    -- `-I0` disables idle GC. We do this in application code now. See 'ourIdleGC' for details.
+    -- `-T` is required to collect the stats we use in 'ourIdleGC'.
+    --
+    -- `-qn2` limits the parallel GC to at most 2 capabilities. This came up in #3354/#3394, as the
+    -- parallel GC was causing significant performance overhead. Folks in #ghc on freenode advised
+    -- limiting the parallel GC to 2 or 3 capabilities as a very conservative choice, since more
+    -- than that is highly unlikely to ever be helpful. More benchmarking would be useful to know if
+    -- this is the right decision. It’s possible it would better to just turn it off completely.
+    --
+    -- `-kc8K` helps limit memory consumption in websockets (perhaps elsewhere) by making the 
+    -- cost of a thread's first (and probably only) stack overflow less severe. 
+    -- See:https://github.com/hasura/graphql-engine/issues/5190 
+    --
+    -- `--disable-delayed-os-memory-return` seems to help lower reported residency, in particular 
+    -- in situations where we seem to be dealing with haskell heap fragmentation. This is more a 
+    -- workaround for limitations in monitoring tools than anything...
+    "-with-rtsopts=-N -I0 -T -qn2 -kc8K --disable-delayed-os-memory-return"
+
 library
-  default-extensions:  NoImplicitPrelude
+  import: common-all
   hs-source-dirs:      src-lib
-                     , src-exec
-  default-language:    Haskell2010
   build-depends:       base
+                     , bifunctors
+                     , witherable
+                     , validation
+                     , lifted-base
                      , pg-client
                      , text
                      , text-builder >= 0.6
+                     , vector-builder
                      , bytestring
                      , postgresql-libpq
                      , mtl
@@ -44,31 +84,40 @@ library
                      , http-types
                      , attoparsec
                      , attoparsec-iso8601 >= 1.0
-                     , time
+                     , time >= 1.9
                      , scientific
                      , Spock-core
                      , split
                      , optparse-applicative
-                     , wai-extra
                      , containers
                      , monad-control
                      , monad-time
-                     , wai-logger
+                     , monad-validate
                      , fast-logger
                      , wai
                      , postgresql-binary
                      , process
+                     , http-client-tls
+                     , profunctors
+                     , deepseq
+                     , dependent-map >=0.2.4 && <0.4
+                     , dependent-sum >=0.4 && <0.5
+                     , exceptions
+                     , these
+                     , semialign
 
                      -- Encoder related
                      , uuid
                      , vector
+                     , vector-builder
 
                      -- Logging related
                      , network
                      , byteorder
 
-                     -- hashing for logging
+                     -- for parsing RSA keys
                      , cryptonite
+
                      -- for jwt verification
                      , jose
                      , pem
@@ -83,21 +132,18 @@ library
 
                      -- GraphQL related
                      , graphql-parser
-                     , wai-middleware-static
 
                      -- URL parser related
                      , network-uri
+                     , uri-encode
 
                      -- String related
                      , case-insensitive
-                     , string-conversions
+                     , text-conversions
 
                      -- Http client
                      , wreq
                      , http-client
-                     , http-client-tls
-                     , connection
-                     , retry
 
                      -- ordered map
                      , insert-ordered-containers
@@ -107,8 +153,8 @@ library
 
                      -- Templating
                      , mustache
-                     , ginger
                      , file-embed
+                     , shakespeare >= 2.0.22
 
                      --
                      , data-has
@@ -119,166 +165,324 @@ library
                      -- websockets interface related
                      , websockets
                      , wai-websockets
-                     , hashtables
                      , stm
                      , stm-containers
                      , list-t
                      , async
+                     , lifted-async
+                     , immortal < 0.3
 
                      -- logging related
                      , base64-bytestring >= 1.0
                      , auto-update
 
                      -- regex related
-                     , regex-compat
+                     , regex-tdfa >=1.3.1 && <1.4
 
-  exposed-modules:     Hasura.Server.App
-                     , Hasura.Server.Auth
-                     , Hasura.Server.Auth.JWT
-                     , Hasura.Server.Init
-                     , Hasura.Server.Middleware
-                     , Hasura.Server.Logging
-                     , Hasura.Server.Query
-                     , Hasura.Server.Utils
-                     , Hasura.Server.Version
-                     , Hasura.Server.CheckUpdates
-                     , Hasura.RQL.Types
-                     , Hasura.RQL.Instances
-                     , Hasura.RQL.Types.SchemaCache
-                     , Hasura.RQL.Types.Common
-                     , Hasura.RQL.Types.Permission
-                     , Hasura.RQL.Types.Error
-                     , Hasura.RQL.Types.DML
-                     , Hasura.RQL.Types.Subscribe
-                     , Hasura.RQL.DDL.Deps
-                     , Hasura.RQL.DDL.Permission.Internal
-                     , Hasura.RQL.DDL.Permission.Triggers
-                     , Hasura.RQL.DDL.Permission
-                     , Hasura.RQL.DDL.Relationship
-                     , Hasura.RQL.DDL.QueryTemplate
-                     , Hasura.RQL.DDL.Schema.Table
-                     , Hasura.RQL.DDL.Schema.Diff
-                     , Hasura.RQL.DDL.Metadata
-                     , Hasura.RQL.DDL.Utils
-                     , Hasura.RQL.DDL.Subscribe
-                     , Hasura.RQL.DML.Delete
-                     , Hasura.RQL.DML.Internal
-                     , Hasura.RQL.DML.Insert
-                     , Hasura.RQL.DML.Returning
-                     , Hasura.RQL.DML.Select
-                     , Hasura.RQL.DML.Update
-                     , Hasura.RQL.DML.Count
-                     , Hasura.RQL.DML.QueryTemplate
-                     , Hasura.RQL.GBoolExp
+                     -- pretty printer
+                     , ansi-wl-pprint
 
-                     , Hasura.GraphQL.Transport.HTTP.Protocol
-                     , Hasura.GraphQL.Transport.HTTP
-                     , Hasura.GraphQL.Transport.WebSocket.Protocol
-                     , Hasura.GraphQL.Transport.WebSocket.Server
-                     , Hasura.GraphQL.Transport.WebSocket
-                     , Hasura.GraphQL.Schema
-                     , Hasura.GraphQL.Utils
-                     , Hasura.GraphQL.Validate
-                     , Hasura.GraphQL.Validate.Types
-                     , Hasura.GraphQL.Validate.Context
-                     , Hasura.GraphQL.Validate.Field
-                     , Hasura.GraphQL.Validate.InputValue
-                     , Hasura.GraphQL.Resolve
+                     -- for capturing various metrics
+                     , ekg-core
+                     , ekg-json
+
+                     -- metrics for CI integration
+                     , ci-info
+
+                     -- serve static files
+                     , filepath >= 1.4
+                     , mime-types >= 0.1
+
+                     -- for handling posix signals for graceful shutdown
+                     , unix
+                     -- HTTP compression
+                     , zlib
+
+                     -- caching
+                     , psqueues >= 0.2
+
+                     -- testing
+                     , QuickCheck
+                     , generic-arbitrary
+                     , quickcheck-instances
+
+                     -- 0.6.1 is supposedly not okay for ghc 8.6:
+                     --   https://github.com/nomeata/ghc-heap-view/issues/27
+                     , ghc-heap-view
+
+                     , directory
+                     
+                     , random
+                     , mmorph
+                     , http-api-data
+                     , lens-aeson
+                     , safe
+                     
+                     , semigroups >= 0.19.1
+
+                     -- scheduled triggers
+                     , cron >= 0.6.2
+
+  exposed-modules:     Control.Arrow.Extended
+                     , Control.Arrow.Trans
+                     , Control.Concurrent.Extended
+                     , Control.Lens.Extended
+                     , Control.Monad.Stateless
+                     , Control.Monad.Unique
+                     , Data.Aeson.Extended
+                     , Data.Aeson.Ordered
+                     , Data.Environment
+                     , Data.HashMap.Strict.Extended
+                     , Data.HashMap.Strict.InsOrd.Extended
+                     , Data.List.Extended
+                     , Data.Parser.CacheControl
+                     , Data.Parser.Expires
+                     , Data.Parser.JSONPath
+                     , Data.Sequence.NonEmpty
+                     , Data.TByteString
+                     , Data.Text.Extended
+                     , Data.Time.Clock.Units
+                     , Data.URL.Template
+                     , Hasura.App
+                     , Hasura.Cache.Bounded
+                     , Hasura.Db
+                     , Hasura.EncJSON
+                     , Hasura.Eventing.Common
+                     , Hasura.Eventing.EventTrigger
+                     , Hasura.Eventing.HTTP
+                     , Hasura.Eventing.ScheduledTrigger
+                     , Hasura.GraphQL.Context
+                     , Hasura.GraphQL.Execute
+                     , Hasura.GraphQL.Execute.LiveQuery
+                     , Hasura.GraphQL.Execute.LiveQuery.Options
+                     , Hasura.GraphQL.Execute.LiveQuery.Plan
+                     , Hasura.GraphQL.Execute.LiveQuery.Poll
+                     , Hasura.GraphQL.Execute.LiveQuery.State
+                     , Hasura.GraphQL.Execute.LiveQuery.TMap
+                     , Hasura.GraphQL.Execute.Plan
+                     , Hasura.GraphQL.Execute.Query
                      , Hasura.GraphQL.Explain
-                     , Hasura.GraphQL.Resolve.LiveQuery
+                     , Hasura.GraphQL.Logging
+                     , Hasura.GraphQL.NormalForm
+                     , Hasura.GraphQL.RelaySchema
+                     , Hasura.GraphQL.RemoteServer
+                     , Hasura.GraphQL.Resolve
+                     , Hasura.GraphQL.Resolve.Action
                      , Hasura.GraphQL.Resolve.BoolExp
                      , Hasura.GraphQL.Resolve.Context
                      , Hasura.GraphQL.Resolve.InputValue
-                     , Hasura.GraphQL.Resolve.Introspect
                      , Hasura.GraphQL.Resolve.Insert
+                     , Hasura.GraphQL.Resolve.Introspect
                      , Hasura.GraphQL.Resolve.Mutation
                      , Hasura.GraphQL.Resolve.Select
-
-                     , Hasura.Events.Lib
-                     , Hasura.Events.HTTP
-
-                     , Data.Text.Extended
-                     , Data.Sequence.NonEmpty
-                     , Data.TByteString
-                     , Data.HashMap.Strict.InsOrd.Extended
-
+                     , Hasura.GraphQL.Resolve.Types
+                     , Hasura.GraphQL.Schema
+                     , Hasura.GraphQL.Schema.Action
+                     , Hasura.GraphQL.Schema.BoolExp
+                     , Hasura.GraphQL.Schema.Builder
+                     , Hasura.GraphQL.Schema.Common
+                     , Hasura.GraphQL.Schema.CustomTypes
+                     , Hasura.GraphQL.Schema.Function
+                     , Hasura.GraphQL.Schema.Merge
+                     , Hasura.GraphQL.Schema.Mutation.Common
+                     , Hasura.GraphQL.Schema.Mutation.Delete
+                     , Hasura.GraphQL.Schema.Mutation.Insert
+                     , Hasura.GraphQL.Schema.Mutation.Update
+                     , Hasura.GraphQL.Schema.OrderBy
+                     , Hasura.GraphQL.Schema.Select
+                     , Hasura.GraphQL.Transport.HTTP
+                     , Hasura.GraphQL.Transport.HTTP.Protocol
+                     , Hasura.GraphQL.Transport.WebSocket
+                     , Hasura.GraphQL.Transport.WebSocket.Protocol
+                     , Hasura.GraphQL.Transport.WebSocket.Server
+                     , Hasura.GraphQL.Utils
+                     , Hasura.GraphQL.Validate
+                     , Hasura.GraphQL.Validate.Context
+                     , Hasura.GraphQL.Validate.InputValue
+                     , Hasura.GraphQL.Validate.SelectionSet
+                     , Hasura.GraphQL.Validate.Types
+                     , Hasura.HTTP
+                     , Hasura.Incremental
+                     , Hasura.Incremental.Internal.Cache
+                     , Hasura.Incremental.Internal.Dependency
+                     , Hasura.Incremental.Internal.Rule
+                     , Hasura.Incremental.Select
+                     , Hasura.Logging
+                     , Hasura.Prelude
+                     , Hasura.RQL.DDL.Action
+                     , Hasura.RQL.DDL.ComputedField
+                     , Hasura.RQL.DDL.CustomTypes
+                     , Hasura.RQL.DDL.Deps
+                     , Hasura.RQL.DDL.EventTrigger
+                     , Hasura.RQL.DDL.Headers
+                     , Hasura.RQL.DDL.Metadata
+                     , Hasura.RQL.DDL.Metadata.Generator
+                     , Hasura.RQL.DDL.Metadata.Types
+                     , Hasura.RQL.DDL.Permission
+                     , Hasura.RQL.DDL.Permission.Internal
+                     , Hasura.RQL.DDL.QueryCollection
+                     , Hasura.RQL.DDL.Relationship
+                     , Hasura.RQL.DDL.Relationship.Rename
+                     , Hasura.RQL.DDL.Relationship.Types
+                     , Hasura.RQL.DDL.RemoteRelationship
+                     , Hasura.RQL.DDL.RemoteRelationship.Validate
+                     , Hasura.RQL.DDL.RemoteSchema
+                     , Hasura.RQL.DDL.ScheduledTrigger
+                     , Hasura.RQL.DDL.Schema
+                     , Hasura.RQL.DDL.Schema.Cache
+                     , Hasura.RQL.DDL.Schema.Cache.Common
+                     , Hasura.RQL.DDL.Schema.Cache.Dependencies
+                     , Hasura.RQL.DDL.Schema.Cache.Fields
+                     , Hasura.RQL.DDL.Schema.Cache.Permission
+                     , Hasura.RQL.DDL.Schema.Catalog
+                     , Hasura.RQL.DDL.Schema.Diff
+                     , Hasura.RQL.DDL.Schema.Enum
+                     , Hasura.RQL.DDL.Schema.Function
+                     , Hasura.RQL.DDL.Schema.Rename
+                     , Hasura.RQL.DDL.Schema.Table
+                     , Hasura.RQL.DDL.Utils
+                     , Hasura.RQL.DML.Count
+                     , Hasura.RQL.DML.Delete
+                     , Hasura.RQL.DML.Insert
+                     , Hasura.RQL.DML.Internal
+                     , Hasura.RQL.DML.Mutation
+                     , Hasura.RQL.DML.RemoteJoin
+                     , Hasura.RQL.DML.Returning
+                     , Hasura.RQL.DML.Select
+                     , Hasura.RQL.DML.Select.Internal
+                     , Hasura.RQL.DML.Select.Types
+                     , Hasura.RQL.DML.Update
+                     , Hasura.RQL.GBoolExp
+                     , Hasura.RQL.Instances
+                     , Hasura.RQL.Types
+                     , Hasura.RQL.Types.Action
+                     , Hasura.RQL.Types.BoolExp
+                     , Hasura.RQL.Types.Catalog
+                     , Hasura.RQL.Types.Column
+                     , Hasura.RQL.Types.Common
+                     , Hasura.RQL.Types.ComputedField
+                     , Hasura.RQL.Types.CustomTypes
+                     , Hasura.RQL.Types.DML
+                     , Hasura.RQL.Types.Error
+                     , Hasura.RQL.Types.EventTrigger
+                     , Hasura.RQL.Types.Function
+                     , Hasura.RQL.Types.Metadata
+                     , Hasura.RQL.Types.Permission
+                     , Hasura.RQL.Types.QueryCollection
+                     , Hasura.RQL.Types.RemoteRelationship
+                     , Hasura.RQL.Types.RemoteSchema
+                     , Hasura.RQL.Types.Run
+                     , Hasura.RQL.Types.ScheduledTrigger
+                     , Hasura.RQL.Types.SchemaCache
+                     , Hasura.RQL.Types.SchemaCache.Build
+                     , Hasura.RQL.Types.SchemaCacheTypes
+                     , Hasura.RQL.Types.Table
+                     , Hasura.Server.API.Config
+                     , Hasura.Server.API.PGDump
+                     , Hasura.Server.API.Query
+                     , Hasura.Server.App
+                     , Hasura.Server.Auth
+                     , Hasura.Server.Auth.JWT
+                     , Hasura.Server.Auth.JWT.Internal
+                     , Hasura.Server.Auth.JWT.Logging
+                     , Hasura.Server.Auth.WebHook
+                     , Hasura.Server.CheckUpdates
+                     , Hasura.Server.Compression
+                     , Hasura.Server.Cors
+                     , Hasura.Server.Init
+                     , Hasura.Server.Init.Config
+                     , Hasura.Server.Logging
+                     , Hasura.Server.Middleware
+                     , Hasura.Server.Migrate
+                     , Hasura.Server.Migrate.Version
+                     , Hasura.Server.SchemaUpdate
+                     , Hasura.Server.Telemetry
+                     , Hasura.Server.Telemetry.Counters
+                     , Hasura.Server.Utils
+                     , Hasura.Server.Version
+                     , Hasura.Session
                      , Hasura.SQL.DML
+                     , Hasura.SQL.Error
+                     , Hasura.SQL.GeoJSON
+                     , Hasura.SQL.Rewrite
+                     , Hasura.SQL.Time
                      , Hasura.SQL.Types
                      , Hasura.SQL.Value
-                     , Hasura.SQL.GeoJSON
-                     , Hasura.SQL.Time
-                     , Hasura.SQL.Rewrite
-                     , Hasura.Prelude
-                     , Hasura.Logging
-                     , Ops
-                     , TH
-
-  other-modules:       Hasura.Server.Auth.JWT.Internal
-                     , Hasura.Server.Auth.JWT.Logging
-
-
-  if flag(developer)
-    ghc-prof-options: -rtsopts -fprof-auto -fno-prof-count-entries
-
-  ghc-options: -O2 -Wall
-
+                     , Hasura.Tracing
+                     , Network.URI.Extended
+                     , Network.Wai.Extended
+                     , Network.Wai.Handler.WebSockets.Custom
 executable graphql-engine
-  default-extensions:  NoImplicitPrelude
-  main-is:           Main.hs
-  default-language:  Haskell2010
+  import: common-all, common-exe
   hs-source-dirs:    src-exec
-  build-depends:       base
-                     , warp >= 3.2
-                     , graphql-engine
-                     , aeson >= 1.0
-                     , bytestring >= 0.10
-                     , mtl
-                     , optparse-applicative >= 0.12
-                     , yaml
-                     , template-haskell >= 2.11 , time >= 1.6
-                     , text
-                     , lens
-                     , unordered-containers >= 0.2
-                     , pg-client
-                     , http-client
-                     , http-client-tls
-                     , stm
-                     , wreq
-                     , connection
-                     , string-conversions
+  main-is:           Main.hs
+  build-depends:     base
+                   , graphql-engine
+                   , bytestring
+                   , pg-client
+                   , text
+                   , text-conversions
+                   , unix
 
-  other-modules:     Ops
-                     TH
+test-suite graphql-engine-tests
+  import: common-all, common-exe
+  type: exitcode-stdio-1.0
+  build-depends:
+    , aeson
+    , base
+    , bytestring
+    , graphql-engine
+    , hspec >=2.6.1 && <3
+    , hspec-core >=2.6.1 && <3
+    , hspec-expectations-lifted
+    , http-client
+    , http-types
+    , http-client-tls
+    , jose
+    , lifted-base
+    , monad-control
+    , mtl
+    , natural-transformation >=0.4 && <0.5
+    , optparse-applicative
+    , pg-client
+    , process
+    , QuickCheck
+    , safe
+    , split
+    , time
+    , transformers-base
+    , unordered-containers
+    , text
+  hs-source-dirs: src-test
+  main-is: Main.hs
+  other-modules:
+    Data.Parser.CacheControlSpec
+    Data.Parser.URLTemplate
+    Data.Parser.JSONPathSpec
+    Data.TimeSpec
+    Hasura.IncrementalSpec
+    Hasura.RQL.MetadataSpec
+    Hasura.Server.MigrateSpec
+    Hasura.Server.TelemetrySpec
+    Hasura.CacheBoundedSpec
+    Hasura.Server.AuthSpec
 
-  if flag(developer)
-    ghc-prof-options: -rtsopts -fprof-auto -fno-prof-count-entries
-
-  ghc-options: -O2 -Wall -threaded
-
-test-suite graphql-engine-test
-  type:               exitcode-stdio-1.0
-  main-is:            Main.hs
-  Default-Language:   Haskell2010
-  Hs-Source-Dirs:     test
-  ghc-options:        -O2 -Wall
-  Build-Depends:       Spock-core >= 0.11
-                     , base
-                     , aeson
-                     , aeson-casing
-                     , bytestring
-                     , hspec
-                     , hspec-core
-                     , hspec-wai
-                     , optparse-applicative
-                     , graphql-engine -any
-                     , text
-                     , wai
-                     , pg-client
-                     , time
-                     , yaml
-                     , http-client
-                     , http-client-tls
-                     , unordered-containers >= 0.2
-                     , case-insensitive
-
-  other-modules:     Spec
+-- Benchmarks related to caching (e.g. the plan cache).
+--
+-- NOTE: Some of these are very slow and can only be reasonably run with `cache -n 1` for now.
+benchmark cache
+  import: common-all, common-exe
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs: src-bench-cache
+  build-depends:     base
+                   , criterion
+                   , mwc-random
+                   , mwc-probability
+                   , vector
+                   , deepseq
+                   , graphql-engine
+                   , split
+                   , async
+                   , text
+                   , bytestring

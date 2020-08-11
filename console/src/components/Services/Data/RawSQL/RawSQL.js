@@ -1,14 +1,24 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import PropTypes from 'prop-types';
 import Helmet from 'react-helmet';
 import AceEditor from 'react-ace';
 import 'brace/mode/sql';
-import Modal from 'react-bootstrap/lib/Modal';
-import Button from 'react-bootstrap/lib/Button';
-import { Link } from 'react-router';
 
-import OverlayTrigger from 'react-bootstrap/lib/OverlayTrigger';
-import Tooltip from 'react-bootstrap/lib/Tooltip';
+import Modal from '../../../Common/Modal/Modal';
+import Button from '../../../Common/Button/Button';
+import Tooltip from '../../../Common/Tooltip/Tooltip';
+import KnowMoreLink from '../../../Common/KnowMoreLink/KnowMoreLink';
+import Alert from '../../../Common/Alert';
+import {
+  getLocalStorageItem,
+  LS_RAW_SQL_STATEMENT_TIMEOUT,
+  setLocalStorageItem,
+} from '../../../Common/utils/localStorageUtils';
+
+import StatementTimeout from './StatementTimeout';
+import { parseCreateSQL } from './utils';
+import { checkSchemaModification } from '../../../Common/utils/sqlUtils';
+
 import {
   executeSQL,
   SET_SQL,
@@ -18,32 +28,35 @@ import {
 } from './Actions';
 import { modalOpen, modalClose } from './Actions';
 import globals from '../../../../Globals';
-
-const cascadeTip = (
-  <Tooltip id="tooltip-cascade">
-    Cascade all the dependent metadata references like relationships and
-    permissions.
-  </Tooltip>
-);
-const migrationTip = (
-  <Tooltip id="tooltip-migration">
-    Modifications to the underlying postgres schema should be tracked as
-    migrations
-  </Tooltip>
-);
-const migrationNameTip = (
-  <Tooltip id="tooltip-migration">
-    Use this to change the name of the generated migration files. Defaults to
-    'run_sql_migration'
-  </Tooltip>
-);
-const trackTableTip = (
-  <Tooltip id="tooltip-tracktable">
-    If you are creating a table/view, you can track them to query them with
-    GraphQL
-  </Tooltip>
-);
-
+import {
+  ACE_EDITOR_THEME,
+  ACE_EDITOR_FONT_SIZE,
+} from '../../../Common/AceEditor/utils';
+import { CLI_CONSOLE_MODE } from '../../../../constants';
+import NotesSection from './molecules/NotesSection';
+import styles from '../../../Common/TableCommon/Table.scss';
+/**
+ * # RawSQL React FC
+ * ## renders raw SQL page on route `/data/sql`
+ *
+ * @typedef Props
+ * @property {string} sql
+ * @property {string} resultType
+ * @property {array} result
+ * @property {array} resultHeaders
+ * @property {function} dispatch
+ * @property {boolean} ongoingRequest
+ * @property {object} lastError
+ * @property {boolean} lastSuccess
+ * @property {boolean} isModalOpen
+ * @property {boolean} isCascadeChecked
+ * @property {boolean} isMigrationChecked
+ * @property {boolean} isTableTrackChecked
+ * @property {boolean} migrationMode
+ * @property {array} allSchemas
+ *
+ * @param {Props}
+ */
 const RawSQL = ({
   sql,
   resultType,
@@ -58,124 +71,363 @@ const RawSQL = ({
   isMigrationChecked,
   isTableTrackChecked,
   migrationMode,
-  currentSchema,
+  allSchemas,
 }) => {
-  const styles = require('../TableCommon/Table.scss');
+  // local storage key for SQL
+  const LS_RAW_SQL_SQL = 'rawSql:sql';
 
-  let alert = null;
+  const [statementTimeout, setStatementTimeout] = useState(
+    Number(getLocalStorageItem(LS_RAW_SQL_STATEMENT_TIMEOUT)) || 10
+  );
 
-  if (ongoingRequest) {
-    alert = (
-      <div className={`${styles.padd_left_remove} col-xs-12`}>
-        <div className="hidden alert alert-warning" role="alert">
-          Running...
-        </div>
-      </div>
-    );
-  } else if (lastError) {
-    alert = (
-      <div className={`${styles.padd_left_remove} col-xs-12`}>
-        <div className="hidden alert alert-danger" role="alert">
-          Error: {JSON.stringify(lastError)}
-        </div>
-      </div>
-    );
-  } else if (lastSuccess) {
-    alert = (
-      <div className={`${styles.padd_left_remove} col-xs-12`}>
-        <div className="hidden alert alert-success" role="alert">
-          Executed Query
-        </div>
-      </div>
-    );
-  }
+  const [sqlText, onChangeSQLText] = useState(sql);
+
+  useEffect(() => {
+    if (!sql) {
+      const sqlFromLocalStorage = localStorage.getItem(LS_RAW_SQL_SQL);
+      if (sqlFromLocalStorage) {
+        dispatch({ type: SET_SQL, data: sqlFromLocalStorage });
+        onChangeSQLText(sqlFromLocalStorage);
+      }
+    }
+    return () => {
+      localStorage.setItem(LS_RAW_SQL_SQL, sqlText);
+    };
+  }, [dispatch, sql, sqlText]);
 
   const submitSQL = () => {
+    if (!sqlText) {
+      localStorage.setItem(LS_RAW_SQL_SQL, '');
+      return;
+    }
+    // set SQL to LS
+    localStorage.setItem(LS_RAW_SQL_SQL, sqlText);
+
     // check migration mode global
     if (migrationMode) {
       const checkboxElem = document.getElementById('migration-checkbox');
       const isMigration = checkboxElem ? checkboxElem.checked : false;
       const textboxElem = document.getElementById('migration-name');
       let migrationName = textboxElem ? textboxElem.value : '';
-      if (migrationName.length === 0) {
+      if (isMigration && migrationName.length === 0) {
         migrationName = 'run_sql_migration';
       }
-      if (!isMigration && globals.consoleMode === 'cli') {
-        // if migration is not checked, check if the sql text has any of 'create', 'alter', 'drop'
-        const formattedSql = sql.toLowerCase();
-        if (
-          formattedSql.indexOf('create') !== -1 ||
-          formattedSql.indexOf('alter') !== -1 ||
-          formattedSql.indexOf('drop') !== -1
-        ) {
-          // const confirmation = window.confirm('Your SQL Statement has a schema modifying command. Are you sure its not a migration?');
+      if (!isMigration && globals.consoleMode === CLI_CONSOLE_MODE) {
+        // if migration is not checked, check if is schema modification
+        if (checkSchemaModification(sqlText)) {
           dispatch(modalOpen());
-          const confirmation = false;
-          if (confirmation) {
-            dispatch(executeSQL(isMigration, migrationName));
+          return;
+        }
+      }
+      dispatch(executeSQL(isMigration, migrationName, statementTimeout));
+      return;
+    }
+    dispatch(executeSQL(false, '', statementTimeout));
+  };
+
+  const getMigrationWarningModal = () => {
+    const onModalClose = () => {
+      dispatch(modalClose());
+    };
+
+    const onConfirmNoMigration = () => {
+      const isMigration = document.getElementById('migration-checkbox').checked;
+      dispatch(modalClose());
+      dispatch(executeSQL(isMigration));
+    };
+
+    return (
+      <Modal
+        show={isModalOpen}
+        title={'Run SQL'}
+        onClose={onModalClose}
+        onSubmit={onConfirmNoMigration}
+        submitText={'Yes, I confirm'}
+        submitTestId={'not-migration-confirm'}
+      >
+        <div className="content-fluid">
+          <div className="row">
+            <div className="col-xs-12">
+              Your SQL statement is most likely modifying the database schema.
+              Are you sure it is not a migration?
+            </div>
+          </div>
+        </div>
+      </Modal>
+    );
+  };
+
+  const getSQLSection = () => {
+    const handleSQLChange = val => {
+      onChangeSQLText(val);
+      dispatch({ type: SET_SQL, data: val });
+
+      // set migration checkbox true
+      if (checkSchemaModification(val)) {
+        dispatch({ type: SET_MIGRATION_CHECKED, data: true });
+      } else {
+        dispatch({ type: SET_MIGRATION_CHECKED, data: false });
+      }
+
+      // set track this checkbox true
+      const objects = parseCreateSQL(val);
+      if (objects.length) {
+        let allObjectsTrackable = true;
+
+        const trackedObjectNames = allSchemas.map(schema => {
+          return [schema.table_schema, schema.table_name].join('.');
+        });
+
+        allObjectsTrackable = objects.every(object => {
+          if (object.type === 'function') {
+            return false;
           }
+
+          const objectName = [object.schema, object.name].join('.');
+
+          if (trackedObjectNames.includes(objectName)) {
+            return false;
+          }
+
+          return true;
+        });
+
+        if (allObjectsTrackable) {
+          dispatch({ type: SET_TRACK_TABLE_CHECKED, data: true });
         } else {
-          dispatch(executeSQL(isMigration, migrationName));
+          dispatch({ type: SET_TRACK_TABLE_CHECKED, data: false });
         }
       } else {
-        dispatch(executeSQL(isMigration, migrationName));
+        dispatch({ type: SET_TRACK_TABLE_CHECKED, data: false });
       }
-    } else {
-      dispatch(executeSQL(false, ''));
-    }
-  };
+    };
 
-  const onModalClose = () => {
-    dispatch(modalClose());
-  };
-
-  const onConfirmNoMigration = () => {
-    const isMigration = document.getElementById('migration-checkbox').checked;
-    dispatch(modalClose());
-    dispatch(executeSQL(isMigration));
-  };
-
-  const resultTable = (() => {
-    const tableHeadings = resultHeaders.map((columnName, i) => (
-      <th key={i}>{columnName}</th>
-    ));
-    const rows = result.map((row, i) => (
-      <tr key={i}>
-        {row.map((columnValue, j) => (
-          <td key={j}>{columnValue}</td>
-        ))}
-      </tr>
-    ));
-    return !resultType || resultType === 'command' ? null : (
-      <div
-        className={`${styles.addCol} col-xs-12 ${styles.padd_left_remove} ${
-          styles.padd_top
-        }`}
-      >
-        <h4 className={styles.subheading_text}>SQL Result:</h4>
-        {/* Table for the results */}
-        <div className={styles.tableContainer}>
-          <table
-            className={`${
-              styles.table
-            } table table-bordered table-striped table-hover`}
-          >
-            <thead>
-              <tr>{tableHeadings}</tr>
-            </thead>
-            <tbody>{rows}</tbody>
-          </table>
-        </div>
-        <br />
-        <br />
+    return (
+      <div className={styles.add_mar_top}>
+        <AceEditor
+          data-test="sql-test-editor"
+          mode="sql"
+          theme={ACE_EDITOR_THEME}
+          fontSize={ACE_EDITOR_FONT_SIZE}
+          name="raw_sql"
+          value={sqlText}
+          minLines={15}
+          maxLines={100}
+          width="100%"
+          showPrintMargin={false}
+          commands={[
+            {
+              name: 'submit',
+              bindKey: { win: 'Ctrl-Enter', mac: 'Command-Enter' },
+              exec: () => {
+                if (sqlText) {
+                  submitSQL();
+                }
+              },
+            },
+          ]}
+          onChange={handleSQLChange}
+          // prevents unwanted frequent event triggers
+          debounceChangePeriod={200}
+        />
       </div>
     );
-  })();
+  };
+
+  const getResultTable = () => {
+    let resultTable = null;
+
+    if (resultType && resultType !== 'command') {
+      const getTableHeadings = () => {
+        return resultHeaders.map((columnName, i) => (
+          <th key={i}>{columnName}</th>
+        ));
+      };
+
+      const getRows = () => {
+        return result.map((row, i) => (
+          <tr key={i}>
+            {row.map((columnValue, j) => (
+              <td key={j}>{columnValue}</td>
+            ))}
+          </tr>
+        ));
+      };
+
+      resultTable = (
+        <div
+          className={`${styles.addCol} col-xs-12 ${styles.padd_left_remove}`}
+        >
+          <h4 className={styles.subheading_text}>SQL Result:</h4>
+          <div className={styles.tableContainer}>
+            <table
+              className={`table table-bordered table-striped table-hover ${styles.table} `}
+            >
+              <thead>
+                <tr>{getTableHeadings()}</tr>
+              </thead>
+              <tbody>{getRows()}</tbody>
+            </table>
+          </div>
+          <br />
+          <br />
+        </div>
+      );
+    }
+
+    return resultTable;
+  };
+
+  const getMetadataCascadeSection = () => {
+    return (
+      <div className={styles.add_mar_top_small}>
+        <label>
+          <input
+            checked={isCascadeChecked}
+            className={`${styles.add_mar_right_small} ${styles.cursorPointer}`}
+            id="cascade-checkbox"
+            type="checkbox"
+            onChange={() => {
+              dispatch({
+                type: SET_CASCADE_CHECKED,
+                data: !isCascadeChecked,
+              });
+            }}
+          />
+          Cascade metadata
+        </label>
+        <Tooltip
+          message={
+            'Cascade actions on all dependent metadata references, like relationships and permissions'
+          }
+        />
+      </div>
+    );
+  };
+
+  const getTrackThisSection = () => {
+    const dispatchTrackThis = () => {
+      dispatch({
+        type: SET_TRACK_TABLE_CHECKED,
+        data: !isTableTrackChecked,
+      });
+    };
+
+    return (
+      <div className={styles.add_mar_top}>
+        <label>
+          <input
+            checked={isTableTrackChecked}
+            className={`${styles.add_mar_right_small} ${styles.cursorPointer}`}
+            id="track-checkbox"
+            type="checkbox"
+            onChange={dispatchTrackThis}
+            data-test="raw-sql-track-check"
+          />
+          Track this
+        </label>
+        <Tooltip
+          message={
+            'If you are creating tables, views or functions, checking this will also expose them over the GraphQL API as top level fields'
+          }
+        />
+        &nbsp;
+        <KnowMoreLink
+          text={'See supported functions requirements'}
+          href={
+            'https://hasura.io/docs/1.0/graphql/manual/schema/custom-functions.html#supported-sql-functions'
+          }
+        />
+      </div>
+    );
+  };
+
+  const getMigrationSection = () => {
+    let migrationSection = null;
+
+    const getIsMigrationSection = () => {
+      const dispatchIsMigration = () => {
+        dispatch({
+          type: SET_MIGRATION_CHECKED,
+          data: !isMigrationChecked,
+        });
+      };
+
+      return (
+        <div>
+          <label>
+            <input
+              checked={isMigrationChecked}
+              className={styles.add_mar_right_small}
+              id="migration-checkbox"
+              type="checkbox"
+              onChange={dispatchIsMigration}
+              data-test="raw-sql-migration-check"
+            />
+            This is a migration
+          </label>
+          <Tooltip message={'Create a migration file with the SQL statement'} />
+        </div>
+      );
+    };
+
+    const getMigrationNameSection = () => {
+      let migrationNameSection = null;
+
+      if (isMigrationChecked) {
+        migrationNameSection = (
+          <div className={styles.add_mar_top_small + ' ' + styles.add_mar_left}>
+            <div>
+              <label className={styles.add_mar_right}>Migration name:</label>
+              <input
+                className={`${styles.inline_block} ${styles.tableNameInput} ${styles.add_mar_right_small} form-control`}
+                placeholder={'run_sql_migration'}
+                id="migration-name"
+                type="text"
+              />
+              <Tooltip
+                message={
+                  "Name of the generated migration file. Default: 'run_sql_migration'"
+                }
+              />
+              <div
+                className={styles.add_mar_top_small + ' ' + styles.text_gray}
+              >
+                <i>
+                  Note: down migration will not be generated for statements run
+                  using Raw SQL.
+                </i>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return migrationNameSection;
+    };
+
+    if (migrationMode && globals.consoleMode === CLI_CONSOLE_MODE) {
+      migrationSection = (
+        <div className={styles.add_mar_top_small}>
+          {getIsMigrationSection()}
+          {getMigrationNameSection()}
+        </div>
+      );
+    }
+
+    return migrationSection;
+  };
+
+  const updateStatementTimeout = value => {
+    const timeoutInSeconds = Number(value.trim());
+    const isValidTimeout = timeoutInSeconds > 0 && !isNaN(timeoutInSeconds);
+    setLocalStorageItem(LS_RAW_SQL_STATEMENT_TIMEOUT, timeoutInSeconds);
+    setStatementTimeout(isValidTimeout ? timeoutInSeconds : 0);
+  };
+
   return (
     <div
-      className={`${styles.main_wrapper} ${styles.padd_left} ${
-        styles.padd_top
-      }`}
+      className={`${styles.clear_fix} ${styles.padd_left} ${styles.padd_top}`}
     >
       <Helmet title="Run SQL - Data | Hasura" />
       <div className={styles.subHeader}>
@@ -184,212 +436,57 @@ const RawSQL = ({
         </h2>
         <div className="clearfix" />
       </div>
-      <hr />
-      <div>
-        <div className={`${styles.addCol} col-xs-8 ${styles.padd_left_remove}`}>
-          <div>
-            <b>Notes</b>
-            <ul className={styles.remove_ul_left}>
-              <li>
-                You can create views, alter tables or just use any SQL syntax to
-                communicate with the database.
-              </li>
-              <li>
-                If you plan to create a Table/View using Raw SQL, remember to
-                link it to Hasura DB using&nbsp;
-                <Link
-                  to={
-                    '/data/schema/' + currentSchema + '/existing-table-view/add'
-                  }
-                >
-                  Add Existing Table View
-                </Link>{' '}
-                functionality.
-              </li>
-              <li>
-                Please note that if the migrations are enabled,
-                <code>down</code>
-                migrations will not be generated for SQL statements.
-              </li>
-            </ul>
-          </div>
-          <hr />
-          <h4>SQL:</h4>
-          <AceEditor
-            data-test="sql-test-editor"
-            mode="sql"
-            theme="github"
-            name="raw_sql"
-            value={sql}
-            minLines={8}
-            maxLines={100}
-            width="100%"
-            showPrintMargin={false}
-            commands={[
-              {
-                name: 'submit',
-                bindKey: { win: 'Ctrl-Enter', mac: 'Command-Enter' },
-                exec: () => {
-                  submitSQL();
-                },
-              },
-            ]}
-            onChange={val => {
-              dispatch({ type: SET_SQL, data: val });
-              const formattedSql = val.toLowerCase();
-              // set migration checkbox true
-              if (
-                formattedSql.indexOf('create') !== -1 ||
-                formattedSql.indexOf('alter') !== -1 ||
-                formattedSql.indexOf('drop') !== -1
-              ) {
-                dispatch({ type: SET_MIGRATION_CHECKED, data: true });
-              } else {
-                dispatch({ type: SET_MIGRATION_CHECKED, data: false });
-              }
-              // set track table checkbox true
-              if (
-                formattedSql.indexOf('create view') !== -1 ||
-                formattedSql.indexOf('create table') !== -1
-              ) {
-                dispatch({ type: SET_TRACK_TABLE_CHECKED, data: true });
-              } else {
-                dispatch({ type: SET_TRACK_TABLE_CHECKED, data: false });
-              }
-            }}
+      <div className={styles.add_mar_top}>
+        <div className={`${styles.padd_left_remove} col-xs-8`}>
+          <NotesSection />
+        </div>
+
+        <div className={`${styles.padd_left_remove} col-xs-10`}>
+          {getSQLSection()}
+        </div>
+
+        <div
+          className={`${styles.padd_left_remove} ${styles.add_mar_bottom} col-xs-8`}
+        >
+          {getTrackThisSection()}
+          {getMetadataCascadeSection()}
+          {getMigrationSection()}
+
+          <StatementTimeout
+            statementTimeout={statementTimeout}
+            isMigrationChecked={isMigrationChecked}
+            updateStatementTimeout={updateStatementTimeout}
           />
-          <hr />
-          <div>
-            <input
-              checked={isCascadeChecked}
-              className={styles.add_mar_right_small}
-              id="cascade-checkbox"
-              type="checkbox"
-              onChange={() => {
-                dispatch({
-                  type: SET_CASCADE_CHECKED,
-                  data: !isCascadeChecked,
-                });
-              }}
-            />
-            Cascade relationships or permissions metadata
-            <OverlayTrigger placement="right" overlay={cascadeTip}>
-              <i
-                className={`${styles.padd_small_left} fa fa-info-circle`}
-                aria-hidden="true"
-              />
-            </OverlayTrigger>
-          </div>
-          <div className={styles.padd_top}>
-            <input
-              checked={isTableTrackChecked}
-              className={styles.add_mar_right_small}
-              id="track-checkbox"
-              type="checkbox"
-              onChange={() => {
-                dispatch({
-                  type: SET_TRACK_TABLE_CHECKED,
-                  data: !isTableTrackChecked,
-                });
-              }}
-              data-test="raw-sql-track-check"
-            />
-            Track table
-            <OverlayTrigger placement="right" overlay={trackTableTip}>
-              <i
-                className={`${styles.padd_small_left} fa fa-info-circle`}
-                aria-hidden="true"
-              />
-            </OverlayTrigger>
-          </div>
-          {migrationMode && globals.consoleMode === 'cli' ? (
-            <div className={styles.padd_top}>
-              <input
-                checked={isMigrationChecked}
-                className={styles.add_mar_right_small}
-                id="migration-checkbox"
-                type="checkbox"
-                onChange={() => {
-                  dispatch({
-                    type: SET_MIGRATION_CHECKED,
-                    data: !isMigrationChecked,
-                  });
-                }}
-                data-test="raw-sql-migration-check"
-              />
-              This is a migration
-              <OverlayTrigger placement="right" overlay={migrationTip}>
-                <i
-                  className={`${styles.padd_small_left} fa fa-info-circle`}
-                  aria-hidden="true"
-                />
-              </OverlayTrigger>
-              <div className={styles.padd_top}>
-                Migration Name:
-                <OverlayTrigger placement="right" overlay={migrationNameTip}>
-                  <i
-                    className={`${styles.padd_small_left} fa fa-info-circle`}
-                    aria-hidden="true"
-                  />
-                </OverlayTrigger>
-              </div>
-              <input
-                className={
-                  styles.add_mar_right_small +
-                  ' ' +
-                  styles.tableNameInput +
-                  ' ' +
-                  styles.add_mar_top_small +
-                  ' form-control'
-                }
-                placeholder={'Name of the generated migration file'}
-                id="migration-name"
-                type="text"
-              />
-              <hr />
-            </div>
-          ) : (
-            <hr />
-          )}
-          <button
+          <Button
             type="submit"
-            className={styles.yellow_button}
+            className={styles.add_mar_top}
             onClick={submitSQL}
+            color="yellow"
+            size="sm"
             data-test="run-sql"
+            disabled={!sqlText.length}
           >
             Run!
-          </button>
-        </div>
-        <div className="hidden col-xs-4">{alert}</div>
-      </div>
-      <Modal show={isModalOpen} onHide={onModalClose.bind(this)}>
-        <Modal.Header closeButton>
-          <Modal.Title>Run SQL</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          <div className="content-fluid">
-            <div className="row">
-              <div className="col-xs-12">
-                Your SQL Statement is most likely modifying the database schema.
-                Are you sure its not a migration?
-              </div>
-            </div>
-          </div>
-        </Modal.Body>
-        <Modal.Footer>
-          <Button onClick={onModalClose}>Cancel</Button>
-          <Button
-            onClick={onConfirmNoMigration}
-            bsStyle="primary"
-            data-test="not-migration-confirm"
-          >
-            Yes, i confirm
           </Button>
-        </Modal.Footer>
-      </Modal>
-      <div className={`${styles.padd_left_remove} container-fluid`}>
-        {resultTable}
+        </div>
+
+        <div className="hidden col-xs-4">
+          <div className={`${styles.padd_left_remove} col-xs-12`}>
+            {ongoingRequest && <Alert type="warning" text="Running..." />}
+            {lastError && (
+              <Alert
+                type="danger"
+                text={`Error: ${JSON.stringify(lastError)}`}
+              />
+            )}
+            {lastSuccess && <Alert type="success" text="Executed Query" />};
+          </div>
+        </div>
       </div>
+
+      {getMigrationWarningModal()}
+
+      <div className={styles.add_mar_bottom}>{getResultTable()}</div>
     </div>
   );
 };
@@ -399,6 +496,7 @@ RawSQL.propTypes = {
   resultType: PropTypes.string.isRequired,
   result: PropTypes.array.isRequired,
   resultHeaders: PropTypes.array.isRequired,
+  allSchemas: PropTypes.array.isRequired,
   dispatch: PropTypes.func.isRequired,
   ongoingRequest: PropTypes.bool.isRequired,
   lastError: PropTypes.object.isRequired,
@@ -408,12 +506,15 @@ RawSQL.propTypes = {
   isTableTrackChecked: PropTypes.bool.isRequired,
   migrationMode: PropTypes.bool.isRequired,
   currentSchema: PropTypes.string.isRequired,
+  statementTimeout: PropTypes.string.isRequired,
 };
 
 const mapStateToProps = state => ({
   ...state.rawSQL,
   migrationMode: state.main.migrationMode,
   currentSchema: state.tables.currentSchema,
+  allSchemas: state.tables.allSchemas,
+  serverVersion: state.main.serverVersion ? state.main.serverVersion : '',
 });
 
 const rawSQLConnector = connect => connect(mapStateToProps)(RawSQL);

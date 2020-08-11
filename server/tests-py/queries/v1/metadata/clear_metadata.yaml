@@ -11,7 +11,7 @@
   url: /v1/query
   status: 200
   response:
-    query_templates: []
+    version: 2
     tables: []
   query:
     type: export_metadata

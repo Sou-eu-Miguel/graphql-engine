@@ -1,92 +1,49 @@
 import PropTypes from 'prop-types';
 import React, { Component } from 'react';
-import { vSetDefaults, vMakeRequest, vExpandHeading } from './ViewActions'; // eslint-disable-line no-unused-vars
+import {
+  vSetDefaults,
+  // vExpandHeading,
+  fetchManualTriggers,
+  UPDATE_TRIGGER_ROW,
+  UPDATE_TRIGGER_FUNCTION,
+  vMakeTableRequests,
+} from './ViewActions';
+import { checkIfTable } from '../../../Common/utils/pgUtils';
 import { setTable } from '../DataActions';
 import TableHeader from '../TableCommon/TableHeader';
-import ViewHeader from './ViewHeader';
 import ViewRows from './ViewRows';
-import { replace } from 'react-router-redux';
 
-const genHeadings = headings => {
-  if (headings.length === 0) {
-    return [];
-  }
-
-  const heading = headings[0];
-  if (typeof heading === 'string') {
-    return [heading, ...genHeadings(headings.slice(1))];
-  }
-  if (typeof heading === 'object') {
-    if (!heading._expanded) {
-      const headingName =
-        heading.type === 'obj_rel' ? heading.lcol : heading.relname;
-      return [
-        { name: headingName, type: heading.type },
-        ...genHeadings(headings.slice(1)),
-      ];
-    }
-    if (heading.type === 'obj_rel') {
-      const subheadings = genHeadings(heading.headings).map(h => {
-        if (typeof h === 'string') {
-          return heading.relname + '.' + h;
-        }
-        return heading.relname + '.' + h.name;
-      });
-      return [...subheadings, ...genHeadings(headings.slice(1))];
-    }
-  }
-
-  throw 'Incomplete pattern match'; // eslint-disable-line no-throw-literal
-};
-
-const genRow = (row, headings) => {
-  if (headings.length === 0) {
-    return [];
-  }
-
-  const heading = headings[0];
-  if (typeof heading === 'string') {
-    return [row[heading], ...genRow(row, headings.slice(1))];
-  }
-  if (typeof heading === 'object') {
-    if (!heading._expanded) {
-      const rowVal = heading.type === 'obj_rel' ? row[heading.lcol] : '[...]';
-      return [rowVal, ...genRow(row, headings.slice(1))];
-    }
-    if (heading.type === 'obj_rel') {
-      const subrow = genRow(row[heading.relname], heading.headings);
-      return [...subrow, ...genRow(row, headings.slice(1))];
-    }
-  }
-
-  throw 'Incomplete pattern match'; // eslint-disable-line no-throw-literal
-};
+import { NotFoundError } from '../../../Error/PageNotFound';
+import { exists } from '../../../Common/utils/jsUtils';
+import { getPersistedPageSize } from './localStorageUtils';
 
 class ViewTable extends Component {
   constructor(props) {
     super(props);
-    // Initialize this table
+
     this.state = {
       dispatch: props.dispatch,
       tableName: props.tableName,
     };
-    // this.state.dispatch = props.dispatch;
-    // this.state.tableName = props.tablename;
-    const dispatch = this.props.dispatch;
-    Promise.all([
-      dispatch(setTable(this.props.tableName)),
-      dispatch(vSetDefaults(this.props.tableName)),
-      dispatch(vMakeRequest()),
-    ]);
+
+    this.getInitialData(this.props.tableName);
   }
 
-  componentWillReceiveProps(nextProps) {
-    const dispatch = this.props.dispatch;
+  UNSAFE_componentWillReceiveProps(nextProps) {
     if (nextProps.tableName !== this.props.tableName) {
-      dispatch(setTable(nextProps.tableName));
-      dispatch(vSetDefaults(nextProps.tableName));
-      dispatch(vMakeRequest());
+      this.getInitialData(nextProps.tableName);
     }
+  }
+
+  getInitialData(tableName) {
+    const { dispatch, currentSchema } = this.props;
+    const limit = getPersistedPageSize(tableName, currentSchema);
+    Promise.all([
+      dispatch(setTable(tableName)),
+      dispatch(vSetDefaults(limit)),
+      dispatch(vMakeTableRequests()),
+      dispatch(fetchManualTriggers(tableName)),
+    ]);
   }
 
   shouldComponentUpdate(nextProps) {
@@ -111,20 +68,36 @@ class ViewTable extends Component {
   componentWillUnmount() {
     // Remove state data beloging to this table
     const dispatch = this.props.dispatch;
-    dispatch(vSetDefaults(this.props.tableName));
+    dispatch(vSetDefaults());
   }
+
+  updateInvocationRow = row => {
+    const { dispatch } = this.props;
+    dispatch({
+      type: UPDATE_TRIGGER_ROW,
+      data: row,
+    });
+  };
+
+  updateInvocationFunction = triggerFunc => {
+    const { dispatch } = this.props;
+    dispatch({
+      type: UPDATE_TRIGGER_FUNCTION,
+      data: triggerFunc,
+    });
+  };
 
   render() {
     const {
       tableName,
-      tableComment,
       schemas,
       query,
       curFilter,
       rows,
-      count, // eslint-disable-line no-unused-vars
+      count,
       activePath,
       migrationMode,
+      readOnlyMode,
       ongoingRequest,
       isProgressing,
       lastError,
@@ -132,18 +105,28 @@ class ViewTable extends Component {
       dispatch,
       expandedRow,
       currentSchema,
-    } = this.props; // eslint-disable-line no-unused-vars
+      manualTriggers = [],
+      triggeredRow,
+      triggeredFunction,
+      location,
+      estimatedCount,
+      isCountEstimated,
+    } = this.props;
 
     // check if table exists
-    const currentTable = schemas.find(s => s.table_name === tableName);
-    if (!currentTable) {
-      // dispatch a 404 route
-      dispatch(replace('/404'));
+    const tableSchema = schemas.find(
+      s => s.table_name === tableName && s.table_schema === currentSchema
+    );
+
+    if (!tableSchema) {
+      // throw a 404 exception
+      throw new NotFoundError();
     }
+
+    const styles = require('../../../Common/Common.scss');
+
     // Is this a view
-    const isView =
-      schemas.find(s => s.table_name === tableName).detail.table_type !==
-      'BASE TABLE';
+    const isView = !checkIfTable(tableSchema);
 
     // Are there any expanded columns
     const viewRows = (
@@ -163,40 +146,48 @@ class ViewTable extends Component {
         lastSuccess={lastSuccess}
         schemas={schemas}
         curDepth={0}
-        count={count}
+        count={exists(count) ? count : estimatedCount}
+        shouldHidePagination={!exists(count) && !estimatedCount}
         dispatch={dispatch}
         expandedRow={expandedRow}
+        manualTriggers={manualTriggers}
+        updateInvocationRow={this.updateInvocationRow.bind(this)}
+        updateInvocationFunction={this.updateInvocationFunction.bind(this)}
+        triggeredRow={triggeredRow}
+        triggeredFunction={triggeredFunction}
+        location={location}
+        readOnlyMode={readOnlyMode}
       />
     );
 
     // Choose the right nav bar header thing
-    let header = (
+    const header = (
       <TableHeader
-        count={count}
+        count={isCountEstimated ? estimatedCount : count}
+        isCountEstimated={isCountEstimated}
         dispatch={dispatch}
-        tableName={tableName}
-        tableComment={tableComment}
-        tabName="view"
+        table={tableSchema}
+        tabName="browse"
         migrationMode={migrationMode}
-        currentSchema={currentSchema}
+        readOnlyMode={readOnlyMode}
       />
     );
-    if (isView) {
-      header = (
-        <ViewHeader
-          dispatch={dispatch}
-          tableName={tableName}
-          tabName="view"
-          tableComment={tableComment}
-          migrationMode={migrationMode}
-          currentSchema={currentSchema}
-        />
+
+    let comment = null;
+    if (tableSchema.comment) {
+      comment = (
+        <div className={styles.add_mar_top}>
+          <div className={styles.commentText + ' alert alert-warning'}>
+            {tableSchema.comment}
+          </div>
+        </div>
       );
     }
 
     return (
       <div>
         {header}
+        {comment}
         <div>{viewRows}</div>
       </div>
     );
@@ -212,6 +203,7 @@ ViewTable.propTypes = {
   query: PropTypes.object.isRequired,
   curFilter: PropTypes.object.isRequired,
   migrationMode: PropTypes.bool.isRequired,
+  readOnlyMode: PropTypes.bool.isRequired,
   ongoingRequest: PropTypes.bool.isRequired,
   isProgressing: PropTypes.bool.isRequired,
   rows: PropTypes.array.isRequired,
@@ -229,6 +221,8 @@ const mapStateToProps = (state, ownProps) => {
     schemas: state.tables.allSchemas,
     tableComment: state.tables.tableComment,
     migrationMode: state.main.migrationMode,
+    readOnlyMode: state.main.readOnlyMode,
+    serverVersion: state.main.serverVersion,
     ...state.tables.view,
   };
 };

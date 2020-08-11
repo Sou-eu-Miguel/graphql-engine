@@ -1,249 +1,725 @@
-/* eslint-disable space-infix-ops */
-/* eslint-disable no-loop-func  */
-
-import PropTypes from 'prop-types';
-
 import React, { Component } from 'react';
+import PropTypes from 'prop-types';
 import Helmet from 'react-helmet';
 import { push } from 'react-router-redux';
-import OverlayTrigger from 'react-bootstrap/lib/OverlayTrigger';
+import { Link } from 'react-router';
 
-import { untrackedTip, untrackedRelTip } from './Tooltips';
+import Button from '../../../Common/Button/Button';
 import {
   setTableName,
   addExistingTableSql,
   addAllUntrackedTablesSql,
+  addExistingFunction,
 } from '../Add/AddExistingTableViewActions';
 import {
-  loadSchema,
-  loadUntrackedSchema,
-  loadUntrackedRelations,
-  fetchSchemaList,
-  LOAD_UNTRACKED_RELATIONS,
-  UPDATE_CURRENT_SCHEMA,
+  updateSchemaInfo,
+  fetchFunctionInit,
+  updateCurrentSchema,
 } from '../DataActions';
-import { getAllUnTrackedRelations } from '../TableRelationships/Actions';
-import AutoAddRelationsConnector from './AutoAddRelations';
-import globals from '../../../../Globals';
+import {
+  autoAddRelName,
+  autoTrackRelations,
+} from '../TableRelationships/Actions';
+import { getRelDef } from '../TableRelationships/utils';
+import {
+  getSchemaAddTableRoute,
+  getSchemaPermissionsRoute,
+} from '../../../Common/utils/routesUtils';
+import { createNewSchema, deleteCurrentSchema } from './Actions';
+import CollapsibleToggle from '../../../Common/CollapsibleToggle/CollapsibleToggle';
+import GqlCompatibilityWarning from '../../../Common/GqlCompatibilityWarning/GqlCompatibilityWarning';
+import {
+  displayTableName,
+  getFunctionName,
+  getSchemaTables,
+  getUntrackedTables,
+} from '../../../Common/utils/pgUtils';
+import { isEmpty } from '../../../Common/utils/jsUtils';
+import { getConfirmation } from '../../../Common/utils/jsUtils';
+import ToolTip from '../../../Common/Tooltip/Tooltip';
+import KnowMoreLink from '../../../Common/KnowMoreLink/KnowMoreLink';
+import RawSqlButton from '../Common/Components/RawSqlButton';
+import styles from '../../../Common/Common.scss';
 
-const appPrefix = globals.urlPrefix + '/data';
+const SchemaPermissionsButton = ({ schema }) => (
+  <Link to={getSchemaPermissionsRoute(schema)} style={{ marginLeft: '20px' }}>
+    <Button color="white" size="xs" className={styles.add_mar_left_mid}>
+      Show Permissions Summary
+    </Button>
+  </Link>
+);
+
+const OpenCreateSection = React.forwardRef(
+  ({ ref, value, handleInputChange, handleCreate, handleCancelCreate }) => (
+    <div className={styles.display_inline + ' ' + styles.add_mar_left}>
+      <div className={styles.display_inline}>
+        <input
+          type="text"
+          value={value}
+          onChange={handleInputChange}
+          placeholder="schema_name"
+          className={`form-control input-sm ${styles.display_inline}`}
+          ref={ref}
+        />
+      </div>
+      <Button
+        color="white"
+        size="xs"
+        onClick={handleCreate}
+        className={styles.add_mar_left_mid}
+      >
+        Create
+      </Button>
+      <Button
+        color="white"
+        size="xs"
+        onClick={handleCancelCreate}
+        className={styles.add_mar_left_mid}
+      >
+        Cancel
+      </Button>
+    </div>
+  )
+);
+
+const ClosedCreateSection = ({ onClick }) => (
+  <Button color="white" size="xs" onClick={onClick} title="Create new schema">
+    Create
+  </Button>
+);
+
+const CreateSchemaSection = React.forwardRef(
+  ({
+    ref,
+    schema,
+    migrationMode,
+    createSchemaOpen,
+    schemaNameEdit,
+    handleCancelCreateNewSchema,
+    handleCreateNewClick,
+    handleSchemaNameChange,
+    handleCreateClick,
+  }) =>
+    migrationMode && (
+      <div className={`${styles.display_flex}`}>
+        {createSchemaOpen ? (
+          <OpenCreateSection
+            ref={ref}
+            value={schemaNameEdit}
+            handleInputChange={handleSchemaNameChange}
+            handleCreate={handleCreateClick}
+            handleCancelCreate={handleCancelCreateNewSchema}
+          />
+        ) : (
+          <ClosedCreateSection onClick={handleCreateNewClick} />
+        )}
+        <SchemaPermissionsButton schema={schema} />
+      </div>
+    )
+);
+
+const DeleteSchemaButton = ({ dispatch, migrationMode }) => {
+  const successCb = () => {
+    dispatch(updateCurrentSchema('public'));
+  };
+
+  const handleDelete = () => {
+    dispatch(deleteCurrentSchema(successCb));
+  };
+
+  return (
+    migrationMode && (
+      <Button
+        color="white"
+        size="xs"
+        onClick={handleDelete}
+        title="Delete current schema"
+      >
+        Delete
+      </Button>
+    )
+  );
+};
 
 class Schema extends Component {
   constructor(props) {
     super(props);
+
     this.state = {
       isExporting: false,
+      createSchemaOpen: false,
+      schemaNameEdit: '',
     };
-    // Initialize this table
-    const dispatch = this.props.dispatch;
-    dispatch(fetchSchemaList());
-    dispatch(loadSchema());
-    dispatch(loadUntrackedSchema());
-    const untrackedRelations = getAllUnTrackedRelations(
-      this.props.schema,
-      this.props.currentSchema
-    ).bulkRelTrack;
-    this.props.dispatch({
-      type: LOAD_UNTRACKED_RELATIONS,
-      untrackedRelations,
-    });
+
+    this.props.dispatch(fetchFunctionInit());
+    this.props.dispatch(
+      updateSchemaInfo({ schemas: [this.props.currentSchema] })
+    );
+
+    this.schemaNameInputRef = React.createRef(null);
   }
 
-  componentDidMount() {
-    const untrackedRelations = getAllUnTrackedRelations(
-      this.props.schema,
-      this.props.currentSchema
-    ).bulkRelTrack;
-    this.props.dispatch({
-      type: LOAD_UNTRACKED_RELATIONS,
-      untrackedRelations,
+  cancelCreateNewSchema = () => {
+    this.setState({
+      createSchemaOpen: false,
     });
-  }
+  };
+
+  onCreateNewClick = () => {
+    this.setState({ createSchemaOpen: true });
+  };
+
+  onChangeSchemaName = e => {
+    this.setState({ schemaNameEdit: e.target.value });
+  };
+
+  handleCreateClick = () => {
+    const schemaName = this.state.schemaNameEdit.trim();
+
+    if (!schemaName) {
+      this.schemaNameInputRef.current.focus();
+      return;
+    }
+
+    const successCb = () => {
+      this.props.dispatch(updateCurrentSchema(schemaName));
+
+      this.setState({
+        schemaNameEdit: '',
+        createSchemaOpen: false,
+      });
+    };
+
+    this.props.dispatch(createNewSchema(schemaName, successCb));
+  };
 
   render() {
     const {
       schema,
       schemaList,
-      untracked,
       migrationMode,
+      readOnlyMode,
       untrackedRelations,
       currentSchema,
       dispatch,
+      functionsList,
+      nonTrackableFunctions,
+      trackedFunctions,
     } = this.props;
 
     const handleSchemaChange = e => {
-      const updatedSchema = e.target.value;
-      dispatch(push(`${appPrefix}/schema/${updatedSchema}`));
-      Promise.all([
-        dispatch({ type: UPDATE_CURRENT_SCHEMA, currentSchema: updatedSchema }),
-        dispatch(loadSchema()),
-        dispatch(loadUntrackedSchema()),
-        dispatch(loadUntrackedRelations()),
-      ]);
+      dispatch(updateCurrentSchema(e.target.value));
     };
 
-    const styles = require('../PageContainer/PageContainer.scss');
+    const _getTrackableFunctions = () => {
+      const trackedFuncNames = trackedFunctions.map(fn => getFunctionName(fn));
 
-    let relationships = 0;
-    schema.map(t => (relationships += t.relationships.length));
+      // Assuming schema for both function and tables are same
+      // return function which are tracked
+      const filterCondition = func => {
+        return !trackedFuncNames.includes(getFunctionName(func));
+      };
 
-    // find which tables are untracked
-    const ids1 = schema.map(item => item.table_name);
-    const ids2 = untracked.map(item => item.table_name);
+      return functionsList.filter(filterCondition);
+    };
 
-    const untrackedTables = ids1
-      .map((id, index) => {
-        if (ids2.indexOf(id) < 0) {
-          return schema[index];
-        }
-      })
-      .concat(
-        ids2.map((id, index) => {
-          if (ids1.indexOf(id) < 0) {
-            return untracked[index];
-          }
-        })
-      )
-      .filter(item => item !== undefined)
-      .sort((a, b) => {
-        return a.table_name === b.table_name
-          ? 0
-          : +(a.table_name > b.table_name) || -1;
-      });
+    const getSectionHeading = (headingText, tooltip, actionElement = null) => {
+      return (
+        <div>
+          <h4 className={`${styles.subheading_text} ${styles.display_inline}`}>
+            {headingText}
+          </h4>
+          <span className={styles.add_mar_left_small}>
+            <ToolTip message={tooltip} />
+          </span>
+          <span className={styles.add_mar_left}>{actionElement}</span>
+        </div>
+      );
+    };
 
-    const untrackedHtml = [];
-    for (let i = 0; i < untrackedTables.length; i++) {
-      untrackedHtml.push(
-        <div className={styles.padd_bottom} key={`${i}untracked`}>
-          <div className={`${styles.display_inline} ${styles.padd_right}`}>
-            <button
-              data-test={`add-track-table-${untrackedTables[i].table_name}`}
-              className={`${styles.display_inline} btn btn-xs btn-default`}
-              onClick={e => {
-                e.preventDefault();
-                dispatch(setTableName(untrackedTables[i].table_name));
-                dispatch(addExistingTableSql());
-              }}
+    const allUntrackedTables = getUntrackedTables(
+      getSchemaTables(schema, currentSchema)
+    );
+    const trackableFuncs = _getTrackableFunctions();
+
+    const getCreateBtn = () => {
+      let createBtn = null;
+
+      if (migrationMode) {
+        const handleClick = e => {
+          e.preventDefault();
+
+          dispatch(push(getSchemaAddTableRoute(currentSchema)));
+        };
+
+        createBtn = (
+          <Button
+            data-test="data-create-table"
+            color="yellow"
+            size="sm"
+            className={styles.add_mar_left}
+            onClick={handleClick}
+          >
+            Create Table
+          </Button>
+        );
+      }
+
+      return createBtn;
+    };
+
+    const getCurrentSchemaSection = () => {
+      const getSchemaOptions = () => {
+        return schemaList.map(s => (
+          <option key={s.schema_name}>{s.schema_name}</option>
+        ));
+      };
+
+      return (
+        <div className={styles.add_mar_top}>
+          <div className={styles.display_inline}>Current Postgres schema</div>
+          <div className={styles.display_inline}>
+            <select
+              onChange={handleSchemaChange}
+              className={`${styles.add_mar_left_mid} ${styles.width_auto} form-control`}
+              value={currentSchema}
             >
-              Add
-            </button>
+              {getSchemaOptions()}
+            </select>
           </div>
-          <div className={`${styles.padd_right} ${styles.inline_block}`}>
-            {untrackedTables[i].table_name}
+          <div className={`${styles.display_inline} ${styles.add_mar_left}`}>
+            <div className={styles.display_inline}>
+              <DeleteSchemaButton
+                dispatch={dispatch}
+                migrationMode={migrationMode}
+              />
+            </div>
+            <div
+              className={`${styles.display_inline} ${styles.add_mar_left_mid}`}
+            >
+              <CreateSchemaSection
+                ref={this.schemaNameInputRef}
+                schema={currentSchema}
+                migrationMode={migrationMode}
+                schemaNameEdit={this.state.schemaNameEdit}
+                createSchemaOpen={this.state.createSchemaOpen}
+                handleCancelCreateNewSchema={this.cancelCreateNewSchema}
+                handleCreateNewClick={this.onCreateNewClick}
+                handleSchemaNameChange={this.onChangeSchemaName}
+                handleCreateClick={this.handleCreateClick}
+              />
+            </div>
           </div>
         </div>
       );
-    }
-    if (!untrackedHtml.length) {
-      untrackedHtml.push(
-        <div key="no-untracked">There are no untracked tables or views</div>
+    };
+
+    const getUntrackedTablesSection = () => {
+      const getTrackAllBtn = () => {
+        if (readOnlyMode) {
+          return null;
+        }
+
+        let trackAllBtn = null;
+
+        const trackAllTables = e => {
+          e.stopPropagation();
+          e.preventDefault();
+
+          const isOk = getConfirmation(
+            'This will expose all the listed tables/views over the GraphQL API'
+          );
+          if (!isOk) {
+            return;
+          }
+
+          dispatch(addAllUntrackedTablesSql(allUntrackedTables));
+        };
+
+        if (allUntrackedTables.length > 0) {
+          trackAllBtn = (
+            <Button
+              className={`${styles.display_inline}`}
+              color="white"
+              size="xs"
+              onClick={trackAllTables}
+            >
+              Track All
+            </Button>
+          );
+        }
+
+        return trackAllBtn;
+      };
+
+      const getUntrackedTablesList = () => {
+        const untrackedTablesList = [];
+
+        if (isEmpty(allUntrackedTables)) {
+          untrackedTablesList.push(
+            <div key="no-untracked">There are no untracked tables or views</div>
+          );
+        } else {
+          allUntrackedTables.forEach((table, i) => {
+            const tableName = table.table_name;
+
+            const getTrackBtn = () => {
+              if (readOnlyMode) {
+                return null;
+              }
+
+              const handleTrackTable = e => {
+                e.preventDefault();
+
+                dispatch(setTableName(tableName));
+                dispatch(addExistingTableSql());
+              };
+
+              return (
+                <div
+                  className={`${styles.display_inline} ${styles.add_mar_right}`}
+                >
+                  <Button
+                    data-test={`add-track-table-${tableName}`}
+                    className={`${styles.display_inline}`}
+                    color="white"
+                    size="xs"
+                    onClick={handleTrackTable}
+                  >
+                    Track
+                  </Button>
+                </div>
+              );
+            };
+
+            untrackedTablesList.push(
+              <div className={styles.padd_bottom} key={`untracked-${i}`}>
+                {getTrackBtn()}
+                <div className={styles.display_inline}>
+                  {displayTableName(table)}
+                </div>
+                <GqlCompatibilityWarning
+                  identifier={tableName}
+                  className={styles.add_mar_left_mid}
+                />
+              </div>
+            );
+          });
+        }
+
+        return untrackedTablesList;
+      };
+
+      const heading = getSectionHeading(
+        'Untracked tables or views',
+        'Tables or views that are not exposed over the GraphQL API',
+        getTrackAllBtn()
       );
-    }
+
+      return (
+        <div className={styles.add_mar_top}>
+          <CollapsibleToggle title={heading} isOpen>
+            <div className={`${styles.padd_left_remove} col-xs-12`}>
+              {getUntrackedTablesList()}
+            </div>
+            <div className={styles.clear_fix} />
+          </CollapsibleToggle>
+        </div>
+      );
+    };
+
+    const getUntrackedRelationsSection = () => {
+      const getTrackAllBtn = () => {
+        if (readOnlyMode) {
+          return null;
+        }
+
+        let trackAllBtn = null;
+
+        const trackAllRelations = e => {
+          e.stopPropagation();
+          e.preventDefault();
+
+          const isOk = getConfirmation(
+            'This will add all the listed foreign-keys as relationships in the GraphQL schema'
+          );
+          if (!isOk) {
+            return;
+          }
+
+          this.props.dispatch(autoTrackRelations(untrackedRelations));
+        };
+
+        if (untrackedRelations.length > 0) {
+          trackAllBtn = (
+            <Button
+              onClick={trackAllRelations}
+              className={`${styles.display_inline}`}
+              color="white"
+              size="xs"
+              data-test="track-all-relationships"
+            >
+              Track All
+            </Button>
+          );
+        }
+
+        return trackAllBtn;
+      };
+
+      const getUntrackedRelList = () => {
+        const untrackedRelList = [];
+
+        if (isEmpty(untrackedRelations)) {
+          untrackedRelList.push(
+            <div key="no-untracked-rel">There are no untracked relations</div>
+          );
+        } else {
+          untrackedRelations.forEach((rel, i) => {
+            const relData = rel.data;
+
+            const getTrackBtn = () => {
+              if (readOnlyMode) {
+                return null;
+              }
+
+              const handleTrackRel = e => {
+                e.preventDefault();
+
+                dispatch(autoAddRelName(rel));
+              };
+
+              return (
+                <div
+                  className={`${styles.display_inline} ${styles.add_mar_right}`}
+                >
+                  <Button
+                    className={styles.display_inline}
+                    color="white"
+                    size="xs"
+                    onClick={handleTrackRel}
+                  >
+                    Track
+                  </Button>
+                </div>
+              );
+            };
+
+            const relFrom = <b>{relData.lTable}</b>;
+
+            const relTo = relData.isObjRel ? (
+              <b>{relData.rTable}</b>
+            ) : (
+              <b>[ {relData.rTable} ]</b>
+            );
+
+            untrackedRelList.push(
+              <div className={styles.padd_bottom} key={`untracked-rel-${i}`}>
+                {getTrackBtn()}
+                <div className={styles.display_inline}>
+                  <span>
+                    {relFrom} &rarr; {relTo}
+                  </span>
+                  &nbsp;&nbsp; - &nbsp;&nbsp;
+                  <span>{getRelDef(relData)}</span>
+                </div>
+              </div>
+            );
+          });
+        }
+
+        return untrackedRelList;
+      };
+
+      const heading = getSectionHeading(
+        'Untracked foreign-key relationships',
+        'Relationships inferred via foreign-keys that are not exposed over the GraphQL API',
+        <>
+          <KnowMoreLink href="https://hasura.io/docs/1.0/graphql/manual/schema/table-relationships/index.html" />
+          <span className={styles.add_mar_left}>{getTrackAllBtn()}</span>
+        </>
+      );
+
+      return (
+        <div className={styles.add_mar_top}>
+          <CollapsibleToggle title={heading} isOpen>
+            <div className={`${styles.padd_left_remove} col-xs-12`}>
+              {getUntrackedRelList()}
+            </div>
+            <div className={styles.clear_fix} />
+          </CollapsibleToggle>
+        </div>
+      );
+    };
+
+    const getUntrackedFunctionsSection = () => {
+      const noTrackableFunctions = isEmpty(trackableFuncs);
+
+      const getTrackableFunctionsList = () => {
+        const trackableFunctionList = [];
+
+        if (noTrackableFunctions) {
+          trackableFunctionList.push(
+            <div key="no-untracked-fns">
+              <div>There are no untracked functions</div>
+            </div>
+          );
+        } else {
+          trackableFuncs.forEach((p, i) => {
+            const getTrackBtn = () => {
+              if (readOnlyMode) {
+                return null;
+              }
+
+              const handleTrackFn = e => {
+                e.preventDefault();
+
+                dispatch(addExistingFunction(p.function_name));
+              };
+
+              return (
+                <div className={styles.display_inline}>
+                  <Button
+                    data-test={`add-track-function-${p.function_name}`}
+                    className={`${styles.display_inline} btn btn-xs btn-default`}
+                    onClick={handleTrackFn}
+                  >
+                    Track
+                  </Button>
+                </div>
+              );
+            };
+
+            trackableFunctionList.push(
+              <div
+                className={styles.padd_bottom}
+                key={`untracked-function-${i}`}
+              >
+                {getTrackBtn()}
+                <div
+                  className={`${styles.display_inline} ${styles.add_mar_left_mid}`}
+                >
+                  <RawSqlButton
+                    dataTestId={`view-function-${p.function_name}`}
+                    customStyles={styles.display_inline}
+                    sql={p.function_definition}
+                    dispatch={dispatch}
+                  >
+                    View
+                  </RawSqlButton>
+                </div>
+                <div
+                  className={`${styles.display_inline} ${styles.add_mar_left}`}
+                >
+                  <span>{p.function_name}</span>
+                </div>
+              </div>
+            );
+          });
+        }
+
+        return trackableFunctionList;
+      };
+
+      const heading = getSectionHeading(
+        'Untracked custom functions',
+        'Custom functions that are not exposed over the GraphQL API',
+        <KnowMoreLink href="https://hasura.io/docs/1.0/graphql/manual/schema/custom-functions.html" />
+      );
+
+      return (
+        <div className={styles.add_mar_top} key={'custom-functions-content'}>
+          <CollapsibleToggle
+            title={heading}
+            isOpen
+            testId={'toggle-trackable-functions'}
+          >
+            <div className={`${styles.padd_left_remove} col-xs-12`}>
+              {getTrackableFunctionsList()}
+            </div>
+            <div className={styles.clear_fix} />
+          </CollapsibleToggle>
+        </div>
+      );
+    };
+
+    const getNonTrackableFunctionsSection = () => {
+      const noNonTrackableFuncs = isEmpty(nonTrackableFunctions);
+
+      const getNonTrackableFuncList = () => {
+        const nonTrackableFunctionList = [];
+
+        if (noNonTrackableFuncs) {
+          nonTrackableFunctionList.push(
+            <div key="no-nontracked-fns">
+              <div>There are no non trackable functions</div>
+            </div>
+          );
+        } else {
+          nonTrackableFunctions.forEach((p, i) => {
+            nonTrackableFunctionList.push(
+              <div
+                className={styles.padd_bottom}
+                key={`untracked-function-${i}`}
+              >
+                <div
+                  className={`${styles.display_inline} ${styles.add_mar_right}`}
+                >
+                  <RawSqlButton
+                    dataTestId={`view-function-${p.function_name}`}
+                    customStyles={styles.display_inline}
+                    sql={p.function_definition}
+                    dispatch={dispatch}
+                  >
+                    View
+                  </RawSqlButton>
+                </div>
+                <div className={styles.display_inline}>{p.function_name}</div>
+              </div>
+            );
+          });
+        }
+        return nonTrackableFunctionList;
+      };
+
+      const heading = getSectionHeading(
+        'Non trackable functions',
+        'Functions that do not conform to Hasura requirements to be exposed over the GraphQL API'
+      );
+
+      return (
+        <div
+          className={styles.add_mar_top}
+          key={'non-trackable-custom-functions'}
+        >
+          <CollapsibleToggle title={heading} isOpen>
+            <div className={`${styles.padd_left_remove} col-xs-12`}>
+              {getNonTrackableFuncList()}
+            </div>
+            <div className={styles.clear_fix} />
+          </CollapsibleToggle>
+        </div>
+      );
+    };
 
     return (
       <div
-        className={`${styles.padd_left_remove} container-fluid ${
-          styles.padd_top
-        }`}
+        className={`container-fluid ${styles.padd_left_remove} ${styles.padd_top}`}
       >
         <div className={styles.padd_left}>
           <Helmet title="Schema - Data | Hasura" />
-          <div>
-            <h2 className={`${styles.heading_text} ${styles.inline_block}`}>
-              {' '}
-              Schema{' '}
+          <div className={styles.display_flex}>
+            <h2 className={`${styles.headerText} ${styles.display_inline}`}>
+              Schema
             </h2>
-            {migrationMode ? (
-              <button
-                data-test="data-create-table"
-                className={styles.yellow_button}
-                onClick={e => {
-                  e.preventDefault();
-                  dispatch(
-                    push(`${appPrefix}/schema/${currentSchema}/table/add`)
-                  );
-                }}
-              >
-                Create Table
-              </button>
-            ) : null}
+            {getCreateBtn()}
           </div>
+          {getCurrentSchemaSection()}
+          {getUntrackedTablesSection()}
+          {getUntrackedRelationsSection()}
+          {getUntrackedFunctionsSection()}
+          {getNonTrackableFunctionsSection()}
           <hr />
-          <div>
-            <div className={styles.display_inline}>Current postgres schema</div>
-            <div className={styles.display_inline}>
-              <select
-                onChange={handleSchemaChange}
-                className={styles.changeSchema + ' form-control'}
-              >
-                {schemaList.map(s => {
-                  if (s.schema_name === currentSchema) {
-                    return (
-                      <option key={s.schema_name} selected="selected">
-                        {s.schema_name}
-                      </option>
-                    );
-                  }
-                  return <option key={s.schema_name}>{s.schema_name}</option>;
-                })}
-              </select>
-            </div>
-          </div>
-          <hr />
-          <div className={styles.add_pad_bottom}>
-            <div>
-              <h4
-                className={`${styles.subheading_text} ${
-                  styles.heading_tooltip
-                }`}
-              >
-                Untracked tables or views
-              </h4>
-              <OverlayTrigger placement="right" overlay={untrackedTip}>
-                <i className="fa fa-info-circle" aria-hidden="true" />
-              </OverlayTrigger>
-              {untrackedTables.length > 0 ? (
-                <button
-                  className={`${styles.display_inline} ${
-                    styles.addAllBtn
-                  } btn btn-xs btn-default`}
-                  onClick={e => {
-                    e.preventDefault();
-                    dispatch(addAllUntrackedTablesSql(untrackedTables));
-                  }}
-                >
-                  Add all
-                </button>
-              ) : null}
-            </div>
-            <div className={`${styles.padd_left_remove} col-xs-12`}>
-              {untrackedHtml}
-            </div>
-          </div>
-          <hr />
-          <div>
-            <div>
-              <h4
-                className={`${styles.subheading_text} ${
-                  styles.heading_tooltip
-                }`}
-              >
-                Untracked foreign-key relations
-              </h4>
-              <OverlayTrigger placement="right" overlay={untrackedRelTip}>
-                <i className="fa fa-info-circle" aria-hidden="true" />
-              </OverlayTrigger>
-              <div className={`${styles.padd_left_remove} col-xs-12`}>
-                <div>
-                  <AutoAddRelationsConnector
-                    untrackedRelations={untrackedRelations}
-                    schema={schema}
-                    dispatch={dispatch}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     );
@@ -252,7 +728,6 @@ class Schema extends Component {
 
 Schema.propTypes = {
   schema: PropTypes.array.isRequired,
-  untracked: PropTypes.array.isRequired,
   untrackedRelations: PropTypes.array.isRequired,
   migrationMode: PropTypes.bool.isRequired,
   currentSchema: PropTypes.string.isRequired,
@@ -262,10 +737,14 @@ Schema.propTypes = {
 const mapStateToProps = state => ({
   schema: state.tables.allSchemas,
   schemaList: state.tables.schemaList,
-  untracked: state.tables.untrackedSchemas,
   migrationMode: state.main.migrationMode,
+  readOnlyMode: state.main.readOnlyMode,
   untrackedRelations: state.tables.untrackedRelations,
   currentSchema: state.tables.currentSchema,
+  functionsList: [...state.tables.postgresFunctions],
+  nonTrackableFunctions: [...state.tables.nonTrackablePostgresFunctions],
+  trackedFunctions: [...state.tables.trackedFunctions],
+  serverVersion: state.main.serverVersion ? state.main.serverVersion : '',
 });
 
 const schemaConnector = connect => connect(mapStateToProps)(Schema);

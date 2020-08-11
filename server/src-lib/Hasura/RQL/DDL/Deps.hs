@@ -1,7 +1,3 @@
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes       #-}
-
 module Hasura.RQL.DDL.Deps
        ( purgeRel
        , parseDropNotice
@@ -13,15 +9,15 @@ module Hasura.RQL.DDL.Deps
 
 import           Hasura.Prelude
 
-import qualified Data.HashSet        as HS
-import qualified Data.Text           as T
-import qualified Database.PG.Query   as Q
+import qualified Data.HashSet      as HS
+import qualified Data.Text         as T
+import qualified Database.PG.Query as Q
 
 import           Hasura.RQL.Types
 import           Hasura.SQL.Types
 
 purgeRel :: QualifiedTable -> RelName -> Q.Tx ()
-purgeRel (QualifiedTable sn tn) rn =
+purgeRel (QualifiedObject sn tn) rn =
   Q.unitQ [Q.sql|
            DELETE FROM hdb_catalog.hdb_relationship
                  WHERE table_schema = $1
@@ -49,8 +45,8 @@ parseDropNotice t = do
   where
     dottedTxtToQualTable dt =
       case T.split (=='.') dt of
-        [tn]     -> return $ QualifiedTable publicSchema $ TableName tn
-        [sn, tn] -> return $ QualifiedTable (SchemaName sn) $ TableName tn
+        [tn]     -> return $ QualifiedObject publicSchema $ TableName tn
+        [sn, tn] -> return $ QualifiedObject (SchemaName sn) $ TableName tn
         _        -> throw400 ParseFailed $ "parsing dotted table failed : " <> dt
 
     getCascadeLines = do
@@ -58,7 +54,7 @@ parseDropNotice t = do
         Just rest -> case T.splitOn "DETAIL:" $ T.strip rest of
           [singleDetail] -> return [singleDetail]
           [_, detailTxt] -> return $ T.lines $ T.strip detailTxt
-          _ -> throw500 "splitOn DETAIL has unexpected structure"
+          _              -> throw500 "splitOn DETAIL has unexpected structure"
         Nothing   -> throw500 "unexpected beginning of notice"
       let cascadeLines = mapMaybe (T.stripPrefix "drop cascades to") detailLines
       when (length detailLines /= length cascadeLines) $
@@ -77,7 +73,7 @@ parseDropNotice t = do
             [_, cn, _, _, tn] -> do
               qt <- dottedTxtToQualTable tn
               return $ Right $ SOTableObj qt $
-                                 TOCons $ ConstraintName cn
+                                 TOForeignKey $ ConstraintName cn
             _       -> throw500 $ "failed to parse constraint cascade line : " <> cl
       | otherwise = return $ Left cl
 
@@ -90,9 +86,9 @@ getPGDeps tx = do
     Q.unitQ "RELEASE SAVEPOINT hdb_get_pg_deps" () False
     return dropNotices
   case dropNotices of
-    [] -> return []
+    []       -> return []
     [notice] -> parseDropNotice notice
-    _ -> throw500 "unexpected number of notices when getting dependencies"
+    _        -> throw500 "unexpected number of notices when getting dependencies"
 
 getIndirectDeps
   :: (CacheRM m, MonadTx m)

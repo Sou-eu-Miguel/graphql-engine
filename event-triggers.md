@@ -33,11 +33,11 @@ The fastest way to try event triggers out is via Heroku.
 
 3. Configure your first event trigger and webhook
 
-   Create a table, configure the database update you want to use as a trigger and instantly invoke a webhook by adding a new row in your table. Follow this [simple guide](https://docs.hasura.io/1.0/graphql/manual/getting-started/first-event-trigger.html).
+   Create a table, configure the database update you want to use as a trigger and instantly invoke a webhook by adding a new row in your table. Follow this [simple guide](https://hasura.io/docs/1.0/graphql/manual/getting-started/first-event-trigger.html).
 
 ### Other deployment methods
 
-For Docker-based deployment and advanced configuration options, see [deployment guides](https://docs.hasura.io/1.0/graphql/manual/getting-started/index.html).
+For Docker-based deployment and advanced configuration options, see [deployment guides](https://hasura.io/docs/1.0/graphql/manual/getting-started/index.html).
 
 ### Demo (*30 seconds*)
 
@@ -48,14 +48,14 @@ For Docker-based deployment and advanced configuration options, see [deployment 
 ### Serverless boilerplates
 
 Use one of the [serverless trigger
-boilerplates](community/boilerplates/serverless-triggers) to deploy a webhook
+boilerplates](community/boilerplates/event-triggers) to deploy a webhook
 that can capture database events.  
 Serverless/cloud-function platforms covered by boilerplates: 
 
-* [AWS Lambda](community/boilerplates/serverless-triggers/aws-lambda)
-* [Google Cloud Functions](community/boilerplates/serverless-triggers/google-cloud-functions)
-* [Azure Functions](community/boilerplates/serverless-triggers/azure-functions)
-* [Zeit Serverless Docker](community/boilerplates/serverless-triggers/zeit-serverless-docker)
+* [AWS Lambda](community/boilerplates/event-triggers/aws-lambda)
+* [Google Cloud Functions](community/boilerplates/event-triggers/google-cloud-functions)
+* [Azure Functions](community/boilerplates/event-triggers/azure-functions)
+* [Zeit Now](community/boilerplates/event-triggers/zeit-now)
 
 ## Architecture
 
@@ -68,8 +68,8 @@ Serverless/cloud-function platforms covered by boilerplates:
 Trigger push notifications and emails based on database events. Try the demo and tutorial below to see how browser push notifications are triggered when the user inserts some data:
 
 * [Watch demo](https://www.youtube.com/watch?v=nuSHkzE2-zo)
-* [Try it out](https://shahidh.in/hasura-web-push-notifs/)
-* [Tutorial](community/examples/serverless-push)
+* [Try it out](https://serverless-push.demo.hasura.app/)
+* [Tutorial](community/sample-apps/serverless-push)
 
 
 <!--
@@ -88,8 +88,8 @@ Convert complex, long-running business logic to be event-driven, asynchronous an
 Transform and load data into external data-stores. Check out this demo and tutorial below to see how Postgres data is transformed to build and populate an Algolia index:
 
 * [Watch demo](https://youtu.be/kWVEBWdEVAA)
-* [Try it out](https://shahidh.in/hasura-serverless-etl)
-* [Tutorial](community/examples/serverless-etl)
+* [Try it out](https://serverless-etl.demo.hasura.app/)
+* [Tutorial](community/sample-apps/serverless-etl)
 
 ### Building reactive UX for your async backend with realtime GraphQL
 
@@ -98,3 +98,9 @@ Propagate event-driven and asynchronous information to UI clients easily with Gr
 ![Reactive apps architecture](assets/reactive-apps-arch.png)
 
 **Watch**: [Building a reactive app with an async backend](https://youtu.be/kTSOxRrtCeI) (*04:15 mins*)
+
+## Translations
+
+This document is available in the following translations:
+
+- [French :fr:](translations/event-triggers.french.md)

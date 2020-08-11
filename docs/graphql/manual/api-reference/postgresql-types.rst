@@ -1,5 +1,16 @@
+.. meta::
+   :description: Supported PostgreSQL types in the Hasura API
+   :keywords: hasura, docs, PostgreSQL types, API reference
+
+.. _api_postgres_types:
+
 API Reference - Supported PostgreSQL Types
 ==========================================
+
+.. contents:: Table of contents
+  :backlinks: none
+  :depth: 1
+  :local:
 
 .. _types_table:
 
@@ -22,7 +33,6 @@ E.g.
 
    objects: [
      {
-       id: 1,
        int_col: 27
      }
    ]
@@ -39,10 +49,16 @@ E.g.
 
    objects: [
      {
-       id: 1,
        float_col: 0.8
      }
    ]
+
+.. note::
+
+   To avoid loss of data when retrieving IEEE 754 style data from the database,
+   please refer to the :ref:`server_flag_reference` for instructions on setting
+   the ``extra_float_digits`` parameter, which has a bad default value in
+   PostgreSQL 11 and older.
 
 .. _Numeric:
 
@@ -56,7 +72,6 @@ E.g.
 
    objects: [
      {
-       id: 1,
        numeric_col: 0.00000008
      }
    ]
@@ -73,7 +88,6 @@ E.g.
 
    objects: [
      {
-       id: 1,
        is_published: true
      }
    ]
@@ -90,7 +104,6 @@ E.g.
 
    objects: [
      {
-       id: 1,
        char_column: "a"
      }
    ]
@@ -109,7 +122,6 @@ E.g.
 
    objects: [
      {
-       id: 1,
        name: "Raven"
      }
    ]
@@ -127,7 +139,6 @@ E.g.
 
    objects: [
      {
-       id: 1,
        date: "1996-03-15"
      }
    ]
@@ -145,7 +156,6 @@ E.g.
 
    objects: [
      {
-       id: 1,
        time: "17:30:15+05:30"
      }
    ]
@@ -163,7 +173,6 @@ E.g.
 
    objects: [
      {
-       id: 1,
        timestamptz_col: "2016-07-20T17:30:15+05:30"
      }
    ]
@@ -180,7 +189,6 @@ E.g.
 
    objects: [
      {
-       id: 1,
        json_col: "{ \"name\": \"raven\" }"
      }
    ]
@@ -199,20 +207,18 @@ E.g.
      insert_test(
        objects: [
          {
-           id: 1,
            jsonb_col: $value
          }
        ]
      ) {
         affected_rows
         returning{
-          id
-          details
+          jsonb_col
         }
      }
    }
 
-variable:
+variables:
 
 .. code-block:: json
 
@@ -222,12 +228,85 @@ variable:
      }
    }
 
+.. _Geometry:
+
+Geometry
+--------
+
+GraphQL custom scalar type ``geometry`` is generated for a ``GEOMETRY`` column
+on a PostGIS enabled Postgres instance. Value should be given as GeoJSON.
+
+E.g.
+
+.. code-block:: graphql
+
+   mutation insertGeometry($point: geometry!) {
+     insert_test(
+       objects: [{
+         geometry_col: $point
+       }]
+     ) {
+       affected_rows
+       returning {
+         geometry_col
+       }
+     }
+   }
+
+variables:
+
+.. code-block:: json
+
+   {
+     "point": {
+       "type": "Point",
+       "coordinates": [0, 0]
+     }
+   }
+
+
+.. _Geography:
+
+Geography
+---------
+
+GraphQL custom scalar type ``geography`` is generated for a ``GEOGRAPHY`` column
+on a PostGIS enabled Postgres instance. Value should be given as GeoJSON.
+
+E.g.
+
+.. code-block:: graphql
+
+   mutation insertGeography($point: geography!) {
+     insert_test(
+       objects: [{
+         geography_col: $point
+       }]
+     ) {
+       affected_rows
+       returning {
+         geography_col
+       }
+     }
+   }
+
+variables:
+
+.. code-block:: json
+
+   {
+     "point": {
+       "type": "Point",
+       "coordinates": [0, 0]
+     }
+   }
+
 .. _Implicit:
 
 Implicitly Supported types
 --------------------------
-All ``Implicit`` types in the :ref:`above table <types_table>` are implicitly supported by GraphQL Engine. You have to
-provide the value in **String**.
+All ``Implicit`` types in the :ref:`above table <types_table>` are implicitly supported by the GraphQL engine. You have to
+provide the value as a **String**.
 
 
 E.g. For time without time zone type
@@ -238,7 +317,6 @@ In ISO 8601 format
 
    objects: [
      {
-       id: 1,
        time_col: "04:05:06.789"
      }
    ]
@@ -249,13 +327,10 @@ E.g. For macaddr type
 
    objects: [
      {
-       id: 1,
        macaddr_col: "08:00:2b:01:02:03"
      }
    ]
 
 .. Note::
 
-   You can learn more about PostgreSQL data types `here <https://www.postgresql.org/docs/current/static/datatype.html>`__
-
-
+   You can learn more about PostgreSQL data types `here <https://www.postgresql.org/docs/current/static/datatype.html>`__.

@@ -1,16 +1,9 @@
-import { push } from 'react-router-redux';
-import globals from 'Globals';
 import defaultState from './State';
-import Endpoints from '../../Endpoints';
+import globals from '../../Globals';
 import requestAction from '../../utils/requestAction';
 import requestActionPlain from '../../utils/requestActionPlain';
-import { globalCookiePolicy } from '../../Endpoints';
-import { saveAccessKeyState } from '../AppState';
-import {
-  ACCESS_KEY_ERROR,
-  UPDATE_DATA_HEADERS,
-} from '../Services/Data/DataActions';
-import { changeRequestHeader } from '../ApiExplorer/Actions';
+import Endpoints, { globalCookiePolicy } from '../../Endpoints';
+import { getFeaturesCompatibility } from '../../helpers/versionUtils';
 
 const SET_MIGRATION_STATUS_SUCCESS = 'Main/SET_MIGRATION_STATUS_SUCCESS';
 const SET_MIGRATION_STATUS_ERROR = 'Main/SET_MIGRATION_STATUS_ERROR';
@@ -26,16 +19,59 @@ const UPDATE_MIGRATION_MODE = 'Main/UPDATE_MIGRATION_MODE';
 const UPDATE_MIGRATION_MODE_PROGRESS = 'Main/UPDATE_MIGRATION_MODE_PROGRESS';
 const EXPORT_METADATA_SUCCESS = 'Main/EXPORT_METADATA_SUCCESS';
 const EXPORT_METADATA_ERROR = 'Main/EXPORT_METADATA_ERROR';
-const UPDATE_ACCESS_KEY_INPUT = 'Main/UPDATE_ACCESS_KEY_INPUT';
+const UPDATE_ADMIN_SECRET_INPUT = 'Main/UPDATE_ADMIN_SECRET_INPUT';
 const LOGIN_IN_PROGRESS = 'Main/LOGIN_IN_PROGRESS';
 const LOGIN_ERROR = 'Main/LOGIN_ERROR';
+
+const RUN_TIME_ERROR = 'Main/RUN_TIME_ERROR';
+const registerRunTimeError = data => ({
+  type: RUN_TIME_ERROR,
+  data,
+});
+
+/* Server config constants*/
+const FETCHING_SERVER_CONFIG = 'Main/FETCHING_SERVER_CONFIG';
+const SERVER_CONFIG_FETCH_SUCCESS = 'Main/SERVER_CONFIG_FETCH_SUCCESS';
+const SERVER_CONFIG_FETCH_FAIL = 'Main/SERVER_CONFIG_FETCH_FAIL';
+/* End */
+const SET_FEATURES_COMPATIBILITY = 'Main/SET_FEATURES_COMPATIBILITY';
+const setFeaturesCompatibility = data => ({
+  type: SET_FEATURES_COMPATIBILITY,
+  data,
+});
+
+const PRO_CLICKED = 'Main/PRO_CLICKED';
+const emitProClickedEvent = data => ({
+  type: PRO_CLICKED,
+  data,
+});
+
+const SET_READ_ONLY_MODE = 'Main/SET_READ_ONLY_MODE';
+const setReadOnlyMode = data => ({
+  type: SET_READ_ONLY_MODE,
+  data,
+});
+
+const featureCompatibilityInit = () => {
+  return (dispatch, getState) => {
+    const { serverVersion } = getState().main;
+
+    if (!serverVersion) {
+      return;
+    }
+
+    const featuresCompatibility = getFeaturesCompatibility(serverVersion);
+
+    return dispatch(setFeaturesCompatibility(featuresCompatibility));
+  };
+};
 
 const loadMigrationStatus = () => dispatch => {
   const url = Endpoints.hasuractlMigrateSettings;
   const options = {
     method: 'GET',
     credentials: globalCookiePolicy,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'content-type': 'application/json' },
   };
   return dispatch(
     requestAction(
@@ -52,7 +88,7 @@ const loadServerVersion = () => dispatch => {
   const options = {
     method: 'GET',
     credentials: globalCookiePolicy,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'content-type': 'application/json' },
   };
   return dispatch(requestActionPlain(url, options)).then(
     data => {
@@ -74,7 +110,36 @@ const loadServerVersion = () => dispatch => {
   );
 };
 
-const checkServerUpdates = () => (dispatch, getState) => {
+const fetchServerConfig = () => (dispatch, getState) => {
+  const url = Endpoints.serverConfig;
+  const options = {
+    method: 'GET',
+    credentials: globalCookiePolicy,
+    headers: getState().tables.dataHeaders,
+  };
+  dispatch({
+    type: FETCHING_SERVER_CONFIG,
+  });
+  return dispatch(requestAction(url, options)).then(
+    data => {
+      dispatch({
+        type: SERVER_CONFIG_FETCH_SUCCESS,
+        data: data,
+      });
+      globals.serverConfig = data;
+      return Promise.resolve();
+    },
+    error => {
+      dispatch({
+        type: SERVER_CONFIG_FETCH_FAIL,
+        data: error,
+      });
+      return Promise.reject();
+    }
+  );
+};
+
+const loadLatestServerVersion = () => (dispatch, getState) => {
   const url =
     Endpoints.updateCheck +
     '?agent=console&version=' +
@@ -82,16 +147,14 @@ const checkServerUpdates = () => (dispatch, getState) => {
   const options = {
     method: 'GET',
     credentials: globalCookiePolicy,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'content-type': 'application/json' },
   };
   return dispatch(requestActionPlain(url, options)).then(
     data => {
-      let parsedVersion;
       try {
-        parsedVersion = JSON.parse(data);
         dispatch({
           type: SET_LATEST_SERVER_VERSION_SUCCESS,
-          data: parsedVersion.latest,
+          data: JSON.parse(data),
         });
       } catch (e) {
         console.error(e);
@@ -102,71 +165,6 @@ const checkServerUpdates = () => (dispatch, getState) => {
       dispatch({ type: SET_LATEST_SERVER_VERSION_ERROR, data: null });
     }
   );
-};
-
-const validateLogin = isInitialLoad => (dispatch, getState) => {
-  const url = Endpoints.getSchema;
-  const currentSchema = getState().tables.currentSchema;
-  const options = {
-    credentials: globalCookiePolicy,
-    method: 'POST',
-    headers: getState().tables.dataHeaders,
-    body: JSON.stringify({
-      type: 'select',
-      args: {
-        table: {
-          name: 'hdb_table',
-          schema: 'hdb_catalog',
-        },
-        columns: ['table_schema'],
-        where: { table_schema: currentSchema },
-        limit: 1,
-      },
-    }),
-  };
-  if (isInitialLoad) {
-    return dispatch(requestAction(url, options));
-  }
-  return dispatch(requestAction(url, options)).then(
-    () => {
-      dispatch({ type: LOGIN_IN_PROGRESS, data: false });
-      dispatch({ type: LOGIN_ERROR, data: false });
-      dispatch(push(globals.urlPrefix));
-    },
-    error => {
-      dispatch({ type: LOGIN_IN_PROGRESS, data: false });
-      dispatch({ type: LOGIN_ERROR, data: true });
-      console.error('Failed to validate access key ' + JSON.stringify(error));
-      if (
-        error.code !== 'access-denied' &&
-        error.code !== 'permission-denied'
-      ) {
-        alert(JSON.stringify(error));
-      }
-    }
-  );
-};
-
-const loginClicked = () => (dispatch, getState) => {
-  // set localstorage
-  dispatch({ type: LOGIN_IN_PROGRESS, data: true });
-  const accessKeyInput = getState().main.accessKeyInput;
-  saveAccessKeyState(accessKeyInput);
-  // redirect to / to test the accessKeyInput;
-  const updatedDataHeaders = {
-    'Content-Type': 'application/json',
-    'X-Hasura-Access-Key': accessKeyInput,
-  };
-  Promise.all([
-    dispatch({ type: ACCESS_KEY_ERROR, data: false }),
-    dispatch({ type: UPDATE_DATA_HEADERS, data: updatedDataHeaders }),
-    dispatch(changeRequestHeader(1, 'key', 'X-Hasura-Access-Key', true)),
-    dispatch(changeRequestHeader(1, 'value', accessKeyInput, true)),
-    // dispatch(push('/'))
-  ]).then(() => {
-    // make a sample query. check error code and push to /
-    dispatch(validateLogin(false));
-  });
 };
 
 const updateMigrationModeStatus = () => (dispatch, getState) => {
@@ -180,7 +178,7 @@ const updateMigrationModeStatus = () => (dispatch, getState) => {
   const options = {
     method: 'PUT',
     credentials: globalCookiePolicy,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify(putBody),
   };
   return dispatch(requestAction(url, options, UPDATE_MIGRATION_MODE)).then(
@@ -192,7 +190,7 @@ const updateMigrationModeStatus = () => (dispatch, getState) => {
         const metadataOptions = {
           method: 'GET',
           credentials: globalCookiePolicy,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'content-type': 'application/json' },
         };
         const metadataUrl = `${Endpoints.hasuractlMetadata}?export=true`;
         return dispatch(
@@ -231,16 +229,16 @@ const mainReducer = (state = defaultState, action) => {
         ...state,
         serverVersion: null,
       };
-
     case SET_LATEST_SERVER_VERSION_SUCCESS:
       return {
         ...state,
-        latestServerVersion: action.data,
+        latestStableServerVersion: action.data.latest,
+        latestPreReleaseServerVersion: action.data.prerelease,
       };
     case SET_LATEST_SERVER_VERSION_ERROR:
       return {
         ...state,
-        latestServerVersion: null,
+        latestStableServerVersion: null,
       };
     case UPDATE_MIGRATION_STATUS_SUCCESS:
       return {
@@ -268,18 +266,58 @@ const mainReducer = (state = defaultState, action) => {
       };
     case UPDATE_MIGRATION_STATUS_ERROR:
       return { ...state, migrationError: action.data };
+    case SET_READ_ONLY_MODE:
+      return {
+        ...state,
+        readOnlyMode: action.data,
+        migrationMode: !action.data, // HACK
+      };
     case HASURACTL_URL_ENV:
       return { ...state, hasuractlEnv: action.data };
     case UPDATE_MIGRATION_MODE:
       const currentMode = state.migrationMode;
       return { ...state, migrationMode: !currentMode };
-    case UPDATE_ACCESS_KEY_INPUT:
-      return { ...state, accessKeyInput: action.data };
+    case UPDATE_ADMIN_SECRET_INPUT:
+      return { ...state, adminSecretInput: action.data };
     case LOGIN_IN_PROGRESS:
       return { ...state, loginInProgress: action.data };
     case LOGIN_ERROR:
       return { ...state, loginError: action.data };
-
+    case RUN_TIME_ERROR: // To trigger telemetry event
+      return state;
+    case FETCHING_SERVER_CONFIG:
+      return {
+        ...state,
+        serverConfig: {
+          ...defaultState.serverConfig,
+          isFetching: true,
+        },
+      };
+    case SERVER_CONFIG_FETCH_SUCCESS:
+      return {
+        ...state,
+        serverConfig: {
+          ...state.serverConfig,
+          data: {
+            ...action.data,
+          },
+          isFetching: false,
+        },
+      };
+    case SERVER_CONFIG_FETCH_FAIL:
+      return {
+        ...state,
+        serverConfig: {
+          ...state.serverConfig,
+          error: action.data,
+          isFetching: false,
+        },
+      };
+    case SET_FEATURES_COMPATIBILITY:
+      return {
+        ...state,
+        featuresCompatibility: { ...action.data },
+      };
     default:
       return state;
   }
@@ -290,13 +328,17 @@ export {
   HASURACTL_URL_ENV,
   UPDATE_MIGRATION_STATUS_SUCCESS,
   UPDATE_MIGRATION_STATUS_ERROR,
-  UPDATE_ACCESS_KEY_INPUT,
+  UPDATE_ADMIN_SECRET_INPUT,
   loadMigrationStatus,
+  setReadOnlyMode,
   updateMigrationModeStatus,
-  loginClicked,
   LOGIN_IN_PROGRESS,
   LOGIN_ERROR,
-  validateLogin,
+  emitProClickedEvent,
   loadServerVersion,
-  checkServerUpdates,
+  fetchServerConfig,
+  loadLatestServerVersion,
+  featureCompatibilityInit,
+  RUN_TIME_ERROR,
+  registerRunTimeError,
 };

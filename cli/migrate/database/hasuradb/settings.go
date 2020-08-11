@@ -19,21 +19,15 @@ func (h *HasuraDB) ensureSettingsTable() error {
 		},
 	}
 
-	resp, body, err := h.sendQuery(query)
+	resp, body, err := h.sendv1Query(query)
 	if err != nil {
 		h.logger.Debug(err)
 		return err
 	}
 	h.logger.Debug("response: ", string(body))
 
-	var horror HasuraError
 	if resp.StatusCode != http.StatusOK {
-		err = json.Unmarshal(body, &horror)
-		if err != nil {
-			h.logger.Debug(err)
-			return err
-		}
-		return horror.Error(h.config.isCMD)
+		return NewHasuraError(body, h.config.isCMD)
 	}
 
 	var hres HasuraSQLRes
@@ -60,19 +54,14 @@ func (h *HasuraDB) ensureSettingsTable() error {
 		},
 	}
 
-	resp, body, err = h.sendQuery(query)
+	resp, body, err = h.sendv1Query(query)
 	if err != nil {
 		return err
 	}
 	h.logger.Debug("response: ", string(body))
 
 	if resp.StatusCode != http.StatusOK {
-		err = json.Unmarshal(body, &horror)
-		if err != nil {
-			return err
-		}
-
-		return horror.Error(h.config.isCMD)
+		return NewHasuraError(body, h.config.isCMD)
 	}
 
 	err = json.Unmarshal(body, &hres)
@@ -105,19 +94,13 @@ func (h *HasuraDB) setDefaultSettings() error {
 		return nil
 	}
 
-	resp, body, err := h.sendQuery(query)
+	resp, body, err := h.sendv1Query(query)
 	if err != nil {
 		return err
 	}
 
-	var horror HasuraError
 	if resp.StatusCode != http.StatusOK {
-		err = json.Unmarshal(body, &horror)
-		if err != nil {
-			h.logger.Debug(err)
-			return err
-		}
-		return horror.Error(h.config.isCMD)
+		return NewHasuraError(body, h.config.isCMD)
 	}
 
 	return nil
@@ -132,22 +115,15 @@ func (h *HasuraDB) GetSetting(name string) (value string, err error) {
 	}
 
 	// Send Query
-	resp, body, err := h.sendQuery(query)
+	resp, body, err := h.sendv1Query(query)
 	if err != nil {
 		return value, err
 	}
 	h.logger.Debug("response: ", string(body))
 
-	var horror HasuraError
-
 	// If status != 200 return error
 	if resp.StatusCode != http.StatusOK {
-		err = json.Unmarshal(body, &horror)
-		if err != nil {
-			return value, err
-		}
-
-		return value, horror.Error(h.config.isCMD)
+		return value, NewHasuraError(body, h.config.isCMD)
 	}
 
 	var hres HasuraSQLRes
@@ -160,13 +136,13 @@ func (h *HasuraDB) GetSetting(name string) (value string, err error) {
 		return value, fmt.Errorf("Invalid result Type %s", hres.ResultType)
 	}
 
-	if len(hres.Result) == 0 {
+	if len(hres.Result) < 2 {
 		for _, setting := range h.settings {
 			if setting.GetName() == name {
 				return setting.GetDefaultValue(), nil
 			}
 		}
-		return "", nil
+		return value, fmt.Errorf("Invalid setting name: %s", name)
 	}
 
 	return hres.Result[1][0], nil
@@ -181,22 +157,15 @@ func (h *HasuraDB) UpdateSetting(name string, value string) error {
 	}
 
 	// Send Query
-	resp, body, err := h.sendQuery(query)
+	resp, body, err := h.sendv1Query(query)
 	if err != nil {
 		return err
 	}
 	h.logger.Debug("response: ", string(body))
 
-	var horror HasuraError
-
 	// If status != 200 return error
 	if resp.StatusCode != http.StatusOK {
-		err = json.Unmarshal(body, &horror)
-		if err != nil {
-			return err
-		}
-
-		return horror.Error(h.config.isCMD)
+		return NewHasuraError(body, h.config.isCMD)
 	}
 
 	var hres HasuraSQLRes

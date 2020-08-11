@@ -1,8 +1,3 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase                 #-}
-{-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE TemplateHaskell            #-}
-
 module Hasura.SQL.GeoJSON
   ( Point(..)
   , MultiPoint(..)
@@ -22,7 +17,6 @@ import qualified Data.Text         as T
 import qualified Data.Vector       as V
 
 import           Control.Monad
-import           Data.Maybe        (maybeToList)
 import           Hasura.Prelude
 
 data Position
@@ -151,7 +145,7 @@ instance J.ToJSON GeometryWithCRS where
     GLineString o         -> encToCoords "LineString" o crsM
     GMultiLineString o    -> encToCoords "MultiLineString" o crsM
     GPolygon o            -> encToCoords "Polygon" o crsM
-    GMultiPolygon o       -> encToCoords "MultiPoylgon" o crsM
+    GMultiPolygon o       -> encToCoords "MultiPolygon" o crsM
     GGeometryCollection o ->
       J.object [ "type" J..= ("GeometryCollection"::T.Text)
                , "geometries" J..= o
@@ -166,7 +160,7 @@ instance J.FromJSON GeometryWithCRS where
       "LineString"         -> GLineString <$> o J..: "coordinates"
       "MultiLineString"    -> GMultiLineString <$> o J..: "coordinates"
       "Polygon"            -> GPolygon <$> o J..: "coordinates"
-      "MultiPoylgon"       -> GMultiPolygon <$> o J..: "coordinates"
+      "MultiPolygon"       -> GMultiPolygon <$> o J..: "coordinates"
       "GeometryCollection" -> GGeometryCollection <$> o J..: "geometries"
       _                    -> fail $ "unexpected geometry type: " <> ty
     crsM <- o J..:? "crs"
